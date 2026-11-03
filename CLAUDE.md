@@ -1,0 +1,37 @@
+# CLAUDE.md — Collaboration Guide for Claude & Antigravity
+
+This repository contains the **ESPNER Colab T4 Luxury Commercial Video Studio** (`D:\廣告影片`). Both **Claude** and **Antigravity** collaborate on this project.
+
+## 1. Core Architecture & Source of Truth
+- **`build_colab_notebook.py`** is the **single source of truth** that generates the Colab notebooks:
+  - `D:\廣告影片\ESPNER_Colab_T4_省記憶體版_v5.1.ipynb`
+  - `D:\廣告影片\ESPNER_Colab_T4_廣告生成器.ipynb`
+  - And automatically syncs them to Google Drive Desktop (`G:\我的雲端硬碟\Colab Notebooks\`) if mounted.
+- Whenever you modify the Colab notebook logic, **edit `build_colab_notebook.py` first**, then run:
+  ```bash
+  python build_colab_notebook.py
+  ```
+  so all local and Google Drive `.ipynb` files stay 100% synchronized.
+
+## 2. Critical Hardware Constraints (Standard Google Colab T4)
+1. **System RAM Limit (`12.7 GB`)**:
+   - Standard Colab only provides `12.7 GB` of CPU System RAM.
+   - **Never** load `RealVisXL` and a video diffusion pipeline in the same Python process, and **never** load the 4.7B T5 text encoder (~9.5 GB) simultaneously with the video transformer (~9 GB) in the same process.
+   - Keep the 3-stage subprocess architecture (`stage_3a.py` -> `stage_3b.py` -> `stage_3c.py`):
+     - `stage_3a.py`: Pure OpenCV background removal (`0 MB` extra RAM; do NOT use `rembg`/`onnxruntime`) + `RealVisXL_V4.0_Lightning` base portrait + 100% genuine eyewear composite.
+     - `stage_3b.py`: Standalone text encoder (`transformer=None, vae=None`) -> saves `/content/temp/prompt_embeds.pt` and exits so the OS reclaims 100% of T5 memory.
+     - `stage_3c.py`: Standalone video generation (`text_encoder=None, tokenizer=None`) loading `/content/temp/prompt_embeds.pt`.
+2. **Tesla T4 GPU Architecture (`sm_75`, Turing, `15 GB VRAM`)**:
+   - **CRITICAL**: Tesla T4 is Compute Capability `7.5` (`sm_75`). It does **NOT** support `torch.bfloat16` in PyTorch's CUTLASS / FlashAttention (`scaled_dot_product_attention`) kernels — using `bfloat16` on T4 throws `RuntimeError: cutlassF: no kernel found to launch!`.
+   - Always check `cc_major = torch.cuda.get_device_capability(0)[0]` and use **`torch.float16`** when `cc_major < 8` (`infer_dtype = torch.float16 if cc_major < 8 else torch.bfloat16`).
+   - Always enable `pipe.enable_model_cpu_offload()` and `pipe.vae.enable_tiling()`.
+3. **Subprocess Output Streaming in Colab (`ipykernel`)**:
+   - In Colab notebooks, `subprocess.run(..., check=True)` hides child stdout/stderr from the notebook cell UI. Always use `run_stage()` with `subprocess.Popen(..., stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)` to stream logs live to the cell output.
+
+## 3. ESPNER v5 Commercial Visual Standards
+- **Resolution & Frame Rate**: `720x1280` (9:16 vertical), `24 fps`, `libx264`, `yuv420p`.
+- **Product Identity Lock**:
+  - Never let text-to-image hallucinate fake sunglasses. Generate an unobstructed portrait first, then composite the user's actual uploaded eyewear (`product_clean_rgba.png`), and animate from that keyframe.
+- **v5 Endcard (`#FFFFFF` Pure White Studio)**:
+  - Must use the original front product photo (`product_clean_rgba.png`) on a pure `#FFFFFF` studio background with a soft ground contact shadow, slow zoom (`1.000 -> 1.035`), and luxury typography (`E S P N E R`, model name, `把目光，還給世界。`, `POLARIZED LUXURY EYEWEAR`).
+  - Maintain strict WCAG contrast (dark charcoal `#111111` / `#4A4A4A` / `#8C6D1F` text on `#FFFFFF` background; never white text on white background).

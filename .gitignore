@@ -1,0 +1,24 @@
+# Whitelist .gitignore for D:\廣告影片 so multi-GB rendered .mp4 folders are never committed
+/*
+
+!/.gitignore
+!/README.md
+!/CLAUDE.md
+!/build_colab_notebook.py
+!/espner_colab_t4_pipeline.py
+!/ESPNER_Colab_T4_省記憶體版_v5.1.ipynb
+!/ESPNER_Colab_T4_廣告生成器.ipynb
+!/sample_products/
+!/sample_products/**
+
+!/ESPNER_Blender廣告製作_20261031/
+/ESPNER_Blender廣告製作_20261031/*
+!/ESPNER_Blender廣告製作_20261031/formal/
+/ESPNER_Blender廣告製作_20261031/formal/*
+!/ESPNER_Blender廣告製作_20261031/formal/build_all_15_master_commercials_v5.py
+!/ESPNER_Blender廣告製作_20261031/creative_styles_test/
+/ESPNER_Blender廣告製作_20261031/creative_styles_test/*
+!/ESPNER_Blender廣告製作_20261031/creative_styles_test/build_5_creative_styles_front_photo_v5.py
+!/ESPNER_Blender廣告製作_20261031/snow_goggles_campaign/
+/ESPNER_Blender廣告製作_20261031/snow_goggles_campaign/*
+!/ESPNER_Blender廣告製作_20261031/snow_goggles_campaign/build_4_snow_goggles_front_photo_v5.py
