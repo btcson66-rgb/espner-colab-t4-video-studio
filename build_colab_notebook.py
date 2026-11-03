@@ -37,40 +37,58 @@ PATHS_TO_WRITE = [
 # Fixes "AssertionError: Torch not compiled with CUDA enabled" (CPU-only torch).
 # Runs the probe in a fresh subprocess so a stale in-kernel torch import never lies.
 # ------------------------------------------------------------------------------
-GPU_GUARD_SRC = [
-    "def _probe_torch_cuda():\n",
-    "    r = subprocess.run([sys.executable, \"-c\", \"import torch,json;print(json.dumps([torch.__version__, torch.version.cuda, torch.cuda.is_available()]))\"], capture_output=True, text=True)\n",
-    "    try:\n",
-    "        return json.loads(r.stdout.strip().splitlines()[-1])\n",
-    "    except Exception:\n",
-    "        return [None, None, False]\n",
-    "\n",
-    "def ensure_cuda_torch():\n",
-    "    gpu_ok = shutil.which(\"nvidia-smi\") is not None and subprocess.run([\"nvidia-smi\", \"-L\"], capture_output=True).returncode == 0\n",
-    "    if not gpu_ok:\n",
-    "        raise RuntimeError(\n",
-    "            \"❌ 目前的 Colab 執行階段『沒有掛載 GPU』（PyTorch 為 CPU 版，會出現 Torch not compiled with CUDA enabled）。\\n\"\n",
-    "            \"👉 請點選上方選單：執行階段 → 變更執行階段類型 → 硬體加速器選「T4 GPU」→ 儲存，\\n\"\n",
-    "            \"   然後從『步驟 1』重新執行。若顯示 GPU 配額已用完，請稍後再試或改用 Colab Pro 的 GPU 執行階段。\"\n",
-    "        )\n",
-    "    ver, cuda_ver, avail = _probe_torch_cuda()\n",
-    "    if cuda_ver and avail:\n",
-    "        print(f\"✅ GPU 檢查通過：torch {ver} (CUDA {cuda_ver})\")\n",
-    "        return\n",
-    "    print(f\"⚠️ 偵測到 GPU 但 PyTorch 為 CPU 版 (torch {ver}, CUDA={cuda_ver})，正在自動重裝 CUDA 版 PyTorch (約 1~2 分鐘)...\")\n",
-    "    idx = \"https://download.pytorch.org/whl/cu126\"\n",
-    "    base = (ver or \"\").split(\"+\")[0]\n",
-    "    pinned = [f\"torch=={base}\"] if base else [\"torch\"]\n",
-    "    cmd = [sys.executable, \"-m\", \"pip\", \"install\", \"-q\", \"--force-reinstall\", \"--no-deps\", \"--index-url\", idx]\n",
-    "    if subprocess.run(cmd + pinned + [\"torchvision\"]).returncode != 0:\n",
-    "        subprocess.run([sys.executable, \"-m\", \"pip\", \"install\", \"-q\", \"--force-reinstall\", \"--index-url\", idx, \"torch\", \"torchvision\"], check=True)\n",
-    "    ver, cuda_ver, avail = _probe_torch_cuda()\n",
-    "    if not (cuda_ver and avail):\n",
-    "        raise RuntimeError(f\"❌ CUDA 版 PyTorch 重裝後仍無法使用 GPU (torch {ver}, CUDA={cuda_ver})。請點『執行階段 → 中斷連線並刪除執行階段』後，以 T4 GPU 重新從步驟 1 開始。\")\n",
-    "    print(f\"✅ 已修復：torch {ver} (CUDA {cuda_ver})。請注意：若本 notebook 核心已 import torch，請重新啟動工作階段後再執行。\")\n",
-    "\n",
-    "ensure_cuda_torch()\n",
-]
+GPU_GUARD_CODE = r"""
+def _probe_torch_cuda():
+    # 在全新子程序中檢查，避免 notebook 核心內舊的 torch 匯入結果造成誤判
+    code = "import torch,json;print(json.dumps([torch.__version__, torch.version.cuda, torch.cuda.is_available()]))"
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    try:
+        return json.loads(r.stdout.strip().splitlines()[-1])
+    except Exception:
+        return [None, None, False]
+
+def _pkg_version(name):
+    try:
+        from importlib.metadata import version
+        return version(name).split("+")[0]
+    except Exception:
+        return None
+
+def ensure_cuda_torch(required=True):
+    gpu_ok = shutil.which("nvidia-smi") is not None and subprocess.run(["nvidia-smi", "-L"], capture_output=True).returncode == 0
+    if not gpu_ok:
+        msg = ("❌ 目前的 Colab 執行階段『沒有掛載 GPU』（PyTorch 為 CPU 版，AI 模式會出現 Torch not compiled with CUDA enabled）。\n"
+               "👉 請點選上方選單：執行階段 → 變更執行階段類型 → 硬體加速器選「T4 GPU」→ 儲存，然後從『步驟 1』重新執行。\n"
+               "   若顯示 GPU 配額已用完，請稍後再試；或在步驟 2 改選「方案 2 (零變形極速)」，此模式不需要 GPU。")
+        if required:
+            raise RuntimeError(msg)
+        print(msg.replace("❌", "⚠️"))
+        return False
+    ver, cuda_ver, avail = _probe_torch_cuda()
+    if cuda_ver and avail:
+        print(f"✅ GPU 檢查通過：torch {ver} (CUDA {cuda_ver})")
+        return True
+    print(f"⚠️ 偵測到 GPU 但 PyTorch 為 CPU 版 (torch {ver}, CUDA={cuda_ver})，正在自動重裝 CUDA 版 PyTorch (約 1~2 分鐘)...")
+    idx = "https://download.pytorch.org/whl/cu126"
+    pins = []
+    for pkg in ["torch", "torchvision", "torchaudio"]:
+        v = _pkg_version(pkg)
+        if v:
+            pins.append(f"{pkg}=={v}")
+    if not pins:
+        pins = ["torch", "torchvision"]
+    base_cmd = [sys.executable, "-m", "pip", "install", "-q", "--force-reinstall", "--no-deps", "--index-url", idx]
+    if subprocess.run(base_cmd + pins).returncode != 0:
+        print("ℹ️ 原版本號無對應 CUDA wheel，改安裝 cu126 最新相容版本...")
+        unpinned = [x.split("==")[0] for x in pins]
+        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--force-reinstall", "--index-url", idx] + unpinned, check=True)
+    ver, cuda_ver, avail = _probe_torch_cuda()
+    if not (cuda_ver and avail):
+        raise RuntimeError(f"❌ CUDA 版 PyTorch 重裝後仍無法使用 GPU (torch {ver}, CUDA={cuda_ver})。請點『執行階段 → 中斷連線並刪除執行階段』，以 T4 GPU 重新從步驟 1 開始。")
+    print(f"✅ 已修復：torch {ver} (CUDA {cuda_ver})")
+    return True
+"""
+GPU_GUARD_SRC = [ln + "\n" for ln in GPU_GUARD_CODE.strip("\n").split("\n")]
 
 cells = [
     {
@@ -129,6 +147,7 @@ cells = [
             "print(\"\\n🧪 正在檢查 PyTorch CUDA (GPU) 是否可用...\")\n",
             "import json, shutil\n",
         ] + GPU_GUARD_SRC + [
+            "ensure_cuda_torch(required=False)\n",
             "\n",
             "subprocess.run([\"apt-get\", \"update\", \"-qq\"], check=True)\n",
             "subprocess.run([\"apt-get\", \"install\", \"-y\", \"-qq\", \"ffmpeg\", \"fonts-noto-cjk\", \"fonts-dejavu-core\"], check=True)\n",
@@ -286,12 +305,13 @@ cells = [
             "    alpha = raw_np[:, :, 3].astype(np.float32) / 255.0\n",
             "else:\n",
             "    # 從四角進行 FloodFill 找出外部純白/淺色背景，並保留鏡片內部反光\n",
+            "    # FIXED_RANGE：與種子色比較 (非相鄰像素)，避免沿漸層滲入鏡片導致整副眼鏡變半透明\n",
             "    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)\n",
             "    bg_mask = np.zeros((h_img + 2, w_img + 2), np.uint8)\n",
             "    work_img = rgb.copy()\n",
             "    tol = (18, 18, 18)\n",
             "    for seed_pt in [(0, 0), (w_img - 1, 0), (0, h_img - 1), (w_img - 1, h_img - 1), (w_img // 2, 0), (w_img // 2, h_img - 1)]:\n",
-            "        cv2.floodFill(work_img, bg_mask, seed_pt, (255, 255, 255), tol, tol, flags=4 | (255 << 8) | cv2.FLOODFILL_MASK_ONLY)\n",
+            "        cv2.floodFill(work_img, bg_mask, seed_pt, (255, 255, 255), tol, tol, flags=4 | (255 << 8) | cv2.FLOODFILL_MASK_ONLY | cv2.FLOODFILL_FIXED_RANGE)\n",
             "    ext_bg = bg_mask[1:-1, 1:-1] > 0\n",
             "    luma_alpha = np.clip((250.0 - gray.astype(np.float32)) / 16.0, 0.0, 1.0)\n",
             "    alpha = np.where(ext_bg, luma_alpha * 0.15, np.maximum(luma_alpha, 0.88))\n",
@@ -471,34 +491,47 @@ cells = [
             "if custom_p_en:\n",
             "    p_mot1 = \"The exact eyewear in the reference image remains clearly recognizable on the model's face. \" + custom_p_en + \", smooth cinematic camera tracking shot, photorealistic luxury commercial.\"\n",
             "    p_mot2 = \"The exact eyewear in the reference image remains clearly recognizable on the model's face. \" + custom_p_en + \", close-up hero shot, confident expression, slow camera push-in.\"\n",
+            "def check_embeds(*ts):\n",
+            "    for t in ts:\n",
+            "        if not torch.isfinite(t).all():\n",
+            "            raise RuntimeError(\"[3B] 文字特徵含 NaN/Inf (FP16 溢位)，請改選方案 1C (SVD-XT) 或方案 2。\")\n",
+            "\n",
             "neg_video = \"deformed sunglasses, melting frame, morphing lenses, changing shape, asymmetry, extra glasses, warped logo, on-screen text, subtitles, watermark, blurry, flickering, jerky camera\"\n",
             "\n",
             "if \"Wan2.2\" in gen_mode:\n",
             "    print(\"[3B] 正在單獨載入 Wan2.2 文字編碼器至 T4 GPU (避免與影片網路同時佔用系統 RAM)...\")\n",
             "    from diffusers import WanImageToVideoPipeline\n",
+            "    from transformers import UMT5EncoderModel\n",
             "    MODEL_ID = \"Wan-AI/Wan2.2-TI2V-5B-Diffusers\"\n",
             "    REV_ID = \"b8fff7315c768468a5333511427288870b2e9635\"\n",
+            "    # 文字編碼器權重直接逐片載入 GPU (device_map=cuda)，避免在 12.7GB 系統 RAM 中先組裝完整模型\n",
+            "    te = UMT5EncoderModel.from_pretrained(MODEL_ID, subfolder=\"text_encoder\", revision=REV_ID, torch_dtype=infer_dtype, device_map=\"cuda\", low_cpu_mem_usage=True)\n",
             "    pipe_te = WanImageToVideoPipeline.from_pretrained(\n",
-            "        MODEL_ID, revision=REV_ID,\n",
+            "        MODEL_ID, revision=REV_ID, text_encoder=te,\n",
             "        transformer=None, vae=None, image_encoder=None, image_processor=None,\n",
-            "        torch_dtype=infer_dtype, low_cpu_mem_usage=True\n",
-            "    ).to(\"cuda\")\n",
+            "        torch_dtype=infer_dtype\n",
+            "    )\n",
             "    with torch.no_grad():\n",
             "        pe1, npe1 = pipe_te.encode_prompt(prompt=p_mot1, negative_prompt=neg_video, do_classifier_free_guidance=True, max_sequence_length=512, device=\"cuda\", dtype=infer_dtype)\n",
             "        pe2, npe2 = pipe_te.encode_prompt(prompt=p_mot2, negative_prompt=neg_video, do_classifier_free_guidance=True, max_sequence_length=512, device=\"cuda\", dtype=infer_dtype)\n",
+            "    check_embeds(pe1, npe1, pe2, npe2)\n",
             "    torch.save({\"pe1\": pe1.cpu(), \"npe1\": npe1.cpu(), \"pe2\": pe2.cpu(), \"npe2\": npe2.cpu()}, \"/content/temp/prompt_embeds.pt\")\n",
             "    print(\"[3B] Wan2.2 文字特徵編碼完成！即將關閉子程序釋放 T5 記憶體...\")\n",
             "elif \"LTX-Video\" in gen_mode:\n",
             "    print(\"[3B] 正在單獨載入 LTX-Video 文字編碼器至 T4 GPU (避免與影片網路同時佔用系統 RAM)...\")\n",
             "    from diffusers import LTXImageToVideoPipeline\n",
+            "    from transformers import T5EncoderModel\n",
+            "    # LTX 的 T5-XXL 在 HF 上是 19GB fp32；直接逐片載入 GPU 並轉 fp16，系統 RAM 不會爆\n",
+            "    te = T5EncoderModel.from_pretrained(\"Lightricks/LTX-Video\", subfolder=\"text_encoder\", torch_dtype=infer_dtype, device_map=\"cuda\", low_cpu_mem_usage=True)\n",
             "    pipe_te = LTXImageToVideoPipeline.from_pretrained(\n",
-            "        \"Lightricks/LTX-Video\",\n",
+            "        \"Lightricks/LTX-Video\", text_encoder=te,\n",
             "        transformer=None, vae=None,\n",
-            "        torch_dtype=infer_dtype, low_cpu_mem_usage=True\n",
-            "    ).to(\"cuda\")\n",
+            "        torch_dtype=infer_dtype\n",
+            "    )\n",
             "    with torch.no_grad():\n",
             "        pe1, pam1, npe1, npam1 = pipe_te.encode_prompt(prompt=p_mot1, negative_prompt=neg_video, do_classifier_free_guidance=True, device=\"cuda\", dtype=infer_dtype)\n",
             "        pe2, pam2, npe2, npam2 = pipe_te.encode_prompt(prompt=p_mot2, negative_prompt=neg_video, do_classifier_free_guidance=True, device=\"cuda\", dtype=infer_dtype)\n",
+            "    check_embeds(pe1, npe1, pe2, npe2)\n",
             "    torch.save({\n",
             "        \"pe1\": pe1.cpu(), \"pam1\": pam1.cpu(), \"npe1\": npe1.cpu(), \"npam1\": npam1.cpu(),\n",
             "        \"pe2\": pe2.cpu(), \"pam2\": pam2.cpu(), \"npe2\": npe2.cpu(), \"npam2\": npam2.cpu()\n",
@@ -585,6 +618,13 @@ cells = [
             "kf2_pil = Image.open(\"/content/temp/keyframe_shot2.png\").convert(\"RGB\")\n",
             "from diffusers.utils import export_to_video\n",
             "\n",
+            "def check_frames(frames, tag):\n",
+            "    arr = np.asarray(frames[len(frames) // 2]).astype(np.float32)\n",
+            "    if arr.max() <= 1.0:\n",
+            "        arr = arr * 255.0\n",
+            "    if not np.isfinite(arr).all() or arr.std() < 2.0:\n",
+            "        raise RuntimeError(f\"{tag} 輸出為全黑/純色畫面 (FP16 數值溢位)\")\n",
+            "\n",
             "try:\n",
             "    if \"Wan2.2\" in gen_mode:\n",
             "        print(f\"[3C] 正在載入無文字編碼器版 Wan2.2-TI2V-5B (text_encoder=None, dtype={infer_dtype}，僅需 ~6GB RAM)...\")\n",
@@ -622,6 +662,7 @@ cells = [
             "                guidance_scale=5.0,\n",
             "                generator=torch.Generator(device=\"cuda\").manual_seed(20261103 + idx)\n",
             "            ).frames[0]\n",
+            "            check_frames(frames, \"Wan2.2\")\n",
             "            tmp_wan = f\"/content/temp/wan_raw_{idx}.mp4\"\n",
             "            export_to_video(frames, tmp_wan, fps=24)\n",
             "            pts_scale = 8.0 / (gen_f / 24.0)\n",
@@ -668,6 +709,7 @@ cells = [
             "                num_inference_steps=24,\n",
             "                generator=torch.Generator(\"cuda\").manual_seed(42 + idx)\n",
             "            ).frames[0]\n",
+            "            check_frames(frames, \"LTX-Video\")\n",
             "            tmp_ai = f\"/content/temp/ltx_raw_{idx}.mp4\"\n",
             "            export_to_video(frames, tmp_ai, fps=24)\n",
             "            subprocess.run([\n",
@@ -692,6 +734,7 @@ cells = [
             "            print(f\"  -> 正在透過 T4 GPU 運算第 {idx}/2 段 SVD-XT 動態鏡頭...\")\n",
             "            kf_in = kf.resize((576, 1024), Image.Resampling.LANCZOS)\n",
             "            frames = pipe(kf_in, decode_chunk_size=2, num_frames=25, motion_bucket_id=100, noise_aug_strength=0.015).frames[0]\n",
+            "            check_frames(frames, \"SVD-XT\")\n",
             "            tmp_ai = f\"/content/temp/svd_raw_{idx}.mp4\"\n",
             "            export_to_video(frames, tmp_ai, fps=8)\n",
             "            subprocess.run([\n",
@@ -712,6 +755,9 @@ cells = [
             "\n",
             "import json, shutil\n",
         ] + GPU_GUARD_SRC + [
+            "with open(\"/content/temp/job_config.json\", \"r\", encoding=\"utf-8\") as _f:\n",
+            "    _gen_mode = json.load(_f)[\"generation_mode\"]\n",
+            "ensure_cuda_torch(required=(\"方案 2\" not in _gen_mode))\n",
             "\n",
             "def run_stage(script_path, stage_title):\n",
             "    print(f\"\\n🚀 開始執行【{stage_title}】...\")\n",
