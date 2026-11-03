@@ -12,6 +12,8 @@ This repository contains the **ESPNER Colab T4 Luxury Commercial Video Studio** 
   python build_colab_notebook.py
   ```
   so all local and Google Drive `.ipynb` files stay 100% synchronized.
+- The three subprocess scripts live as plain Python in module-level constants `STAGE_3A_CODE`, `STAGE_3B_CODE`, `STAGE_3C_CODE` inside `build_colab_notebook.py` (embedded into Step 3 via `embed_stage()`). Edit them there as normal code; never put `"""` inside them.
+- Stage 3C writes `/content/temp/stage3c_status.json` (`ai_ok`, `engine`, per-shot `motion`). Step 3 prints it so a silent fallback is never mistaken for AI motion. `motion < 3.0` = effectively static.
 
 ## 2. Critical Hardware Constraints (Standard Google Colab T4)
 1. **System RAM Limit (`12.7 GB`)**:
