@@ -19,6 +19,9 @@ import os
 import shutil
 
 PATHS_TO_WRITE = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "ESPNER_Colab_T4_LowRAM_v5.2.ipynb"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "ESPNER_Colab_T4_省記憶體版_v5.1.ipynb"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "ESPNER_Colab_T4_廣告生成器.ipynb"),
     r"D:\廣告影片\ESPNER_Colab_T4_LowRAM_v5.2.ipynb",
     r"D:\廣告影片\ESPNER_Colab_T4_省記憶體版_v5.1.ipynb",
     r"D:\廣告影片\ESPNER_Colab_T4_廣告生成器.ipynb",
@@ -26,6 +29,47 @@ PATHS_TO_WRITE = [
     r"G:\我的雲端硬碟\Colab Notebooks\ESPNER_Colab_T4_省記憶體版_v5.1.ipynb",
     r"G:\我的雲端硬碟\Colab Notebooks\ESPNER_Colab_T4_廣告生成器.ipynb",
     r"G:\我的雲端硬碟\Colab Notebooks\ESPNER_Colab_T4_廣告生成器 (1).ipynb",
+]
+
+
+# ------------------------------------------------------------------------------
+# GPU guard: verifies a CUDA GPU is attached and PyTorch is a CUDA build.
+# Fixes "AssertionError: Torch not compiled with CUDA enabled" (CPU-only torch).
+# Runs the probe in a fresh subprocess so a stale in-kernel torch import never lies.
+# ------------------------------------------------------------------------------
+GPU_GUARD_SRC = [
+    "def _probe_torch_cuda():\n",
+    "    r = subprocess.run([sys.executable, \"-c\", \"import torch,json;print(json.dumps([torch.__version__, torch.version.cuda, torch.cuda.is_available()]))\"], capture_output=True, text=True)\n",
+    "    try:\n",
+    "        return json.loads(r.stdout.strip().splitlines()[-1])\n",
+    "    except Exception:\n",
+    "        return [None, None, False]\n",
+    "\n",
+    "def ensure_cuda_torch():\n",
+    "    gpu_ok = shutil.which(\"nvidia-smi\") is not None and subprocess.run([\"nvidia-smi\", \"-L\"], capture_output=True).returncode == 0\n",
+    "    if not gpu_ok:\n",
+    "        raise RuntimeError(\n",
+    "            \"❌ 目前的 Colab 執行階段『沒有掛載 GPU』（PyTorch 為 CPU 版，會出現 Torch not compiled with CUDA enabled）。\\n\"\n",
+    "            \"👉 請點選上方選單：執行階段 → 變更執行階段類型 → 硬體加速器選「T4 GPU」→ 儲存，\\n\"\n",
+    "            \"   然後從『步驟 1』重新執行。若顯示 GPU 配額已用完，請稍後再試或改用 Colab Pro 的 GPU 執行階段。\"\n",
+    "        )\n",
+    "    ver, cuda_ver, avail = _probe_torch_cuda()\n",
+    "    if cuda_ver and avail:\n",
+    "        print(f\"✅ GPU 檢查通過：torch {ver} (CUDA {cuda_ver})\")\n",
+    "        return\n",
+    "    print(f\"⚠️ 偵測到 GPU 但 PyTorch 為 CPU 版 (torch {ver}, CUDA={cuda_ver})，正在自動重裝 CUDA 版 PyTorch (約 1~2 分鐘)...\")\n",
+    "    idx = \"https://download.pytorch.org/whl/cu126\"\n",
+    "    base = (ver or \"\").split(\"+\")[0]\n",
+    "    pinned = [f\"torch=={base}\"] if base else [\"torch\"]\n",
+    "    cmd = [sys.executable, \"-m\", \"pip\", \"install\", \"-q\", \"--force-reinstall\", \"--no-deps\", \"--index-url\", idx]\n",
+    "    if subprocess.run(cmd + pinned + [\"torchvision\"]).returncode != 0:\n",
+    "        subprocess.run([sys.executable, \"-m\", \"pip\", \"install\", \"-q\", \"--force-reinstall\", \"--index-url\", idx, \"torch\", \"torchvision\"], check=True)\n",
+    "    ver, cuda_ver, avail = _probe_torch_cuda()\n",
+    "    if not (cuda_ver and avail):\n",
+    "        raise RuntimeError(f\"❌ CUDA 版 PyTorch 重裝後仍無法使用 GPU (torch {ver}, CUDA={cuda_ver})。請點『執行階段 → 中斷連線並刪除執行階段』後，以 T4 GPU 重新從步驟 1 開始。\")\n",
+    "    print(f\"✅ 已修復：torch {ver} (CUDA {cuda_ver})。請注意：若本 notebook 核心已 import torch，請重新啟動工作階段後再執行。\")\n",
+    "\n",
+    "ensure_cuda_torch()\n",
 ]
 
 cells = [
@@ -52,7 +96,7 @@ cells = [
         "outputs": [],
         "source": [
             "#@title 🚀 步驟 1：掛載 Google Drive、檢查 T4 GPU 並安裝環境套件 (初次執行約需 1.5 分鐘)\n",
-            "import subprocess, os, sys\n",
+            "import subprocess, os, sys, json, shutil\n",
             "\n",
             "#@markdown 是否自動掛載 Google 雲端硬碟以自動備份產出的廣告影片？\n",
             "MOUNT_GOOGLE_DRIVE = True #@param {type:\"boolean\"}\n",
@@ -81,6 +125,11 @@ cells = [
             "    \"accelerate>=1.1\", \"sentencepiece\", \"protobuf\", \"safetensors\", \"ftfy\",\n",
             "    \"opencv-python-headless\", \"pillow\", \"imageio-ffmpeg\", \"soundfile\"\n",
             "], check=True)\n",
+            "\n",
+            "print(\"\\n🧪 正在檢查 PyTorch CUDA (GPU) 是否可用...\")\n",
+            "import json, shutil\n",
+        ] + GPU_GUARD_SRC + [
+            "\n",
             "subprocess.run([\"apt-get\", \"update\", \"-qq\"], check=True)\n",
             "subprocess.run([\"apt-get\", \"install\", \"-y\", \"-qq\", \"ffmpeg\", \"fonts-noto-cjk\", \"fonts-dejavu-core\"], check=True)\n",
             "\n",
@@ -660,6 +709,9 @@ cells = [
             "Path(\"/content/temp/stage_3a.py\").write_text(stage_3a_code, encoding=\"utf-8\")\n",
             "Path(\"/content/temp/stage_3b.py\").write_text(stage_3b_code, encoding=\"utf-8\")\n",
             "Path(\"/content/temp/stage_3c.py\").write_text(stage_3c_code, encoding=\"utf-8\")\n",
+            "\n",
+            "import json, shutil\n",
+        ] + GPU_GUARD_SRC + [
             "\n",
             "def run_stage(script_path, stage_title):\n",
             "    print(f\"\\n🚀 開始執行【{stage_title}】...\")\n",
