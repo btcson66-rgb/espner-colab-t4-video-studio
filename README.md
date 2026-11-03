@@ -1,6 +1,6 @@
 # 🕶️ ESPNER Colab T4 Luxury Commercial Video Studio (`v5.2`)
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/btcson66-rgb/espner-colab-t4-video-studio/blob/main/ESPNER_Colab_T4_%E7%9C%81%E8%A8%98%E6%86%B6%E9%AB%94%E7%89%88_v5.1.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/btcson66-rgb/espner-colab-t4-video-studio/blob/main/ESPNER_Colab_T4_LowRAM_v5.2.ipynb)
 
 專為 **標準 Google Colab T4 GPU (`15 GB VRAM` / `12.7 GB System RAM`)** 打造的 **ESPNER 奢華太陽眼鏡與滑雪護目鏡 9:16 直式廣告自動生成系統**（免開付費 High-RAM）。
 

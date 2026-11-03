@@ -19,8 +19,10 @@ import os
 import shutil
 
 PATHS_TO_WRITE = [
+    r"D:\廣告影片\ESPNER_Colab_T4_LowRAM_v5.2.ipynb",
     r"D:\廣告影片\ESPNER_Colab_T4_省記憶體版_v5.1.ipynb",
     r"D:\廣告影片\ESPNER_Colab_T4_廣告生成器.ipynb",
+    r"G:\我的雲端硬碟\Colab Notebooks\ESPNER_Colab_T4_LowRAM_v5.2.ipynb",
     r"G:\我的雲端硬碟\Colab Notebooks\ESPNER_Colab_T4_省記憶體版_v5.1.ipynb",
     r"G:\我的雲端硬碟\Colab Notebooks\ESPNER_Colab_T4_廣告生成器.ipynb",
     r"G:\我的雲端硬碟\Colab Notebooks\ESPNER_Colab_T4_廣告生成器 (1).ipynb",
