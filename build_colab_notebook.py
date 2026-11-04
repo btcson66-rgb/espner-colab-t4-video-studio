@@ -699,7 +699,6 @@ if "方案 2" in gen_mode:
 
 KFS = {sh["id"]: Image.open(f"/content/temp/keyframe_shot{sh['id']}.png").convert("RGB") for sh in SHOTS}
 DURS = {sh["id"]: sh["dur"] for sh in SHOTS}
-from diffusers.utils import export_to_video
 
 def check_frames(frames, tag):
     arr = np.asarray(frames[len(frames) // 2]).astype(np.float32)
@@ -740,6 +739,38 @@ def fidelity_check(frames, kf_img, tag):
         raise RuntimeError(f"{tag} 輸出畫面異常 (首幀相似度 {c0:.2f}、連續性 {cc:.2f}；可能為顏色反轉或亂碼)")
     return c0, cc
 
+def ltx_generate(pipe, vae32, kf_in, W, H, F, steps, pe, pam, npe, npam, seed, dev, dtype, decode_t=0.05, decode_noise=0.025):
+    # T4 修正：VAE 編碼/解碼一律在 float32 執行 (fp16 VAE 會讓畫面變負片/亂碼)，轉換器只負責去噪
+    g = torch.Generator(dev).manual_seed(seed)
+    sp, st = pipe.transformer_spatial_patch_size, pipe.transformer_temporal_patch_size
+    lf = (F - 1) // pipe.vae_temporal_compression_ratio + 1
+    lh, lw = H // pipe.vae_spatial_compression_ratio, W // pipe.vae_spatial_compression_ratio
+    img = pipe.video_processor.preprocess(kf_in, height=H, width=W).to(dev, torch.float32)
+    with torch.no_grad():
+        enc = vae32.encode(img.unsqueeze(2)).latent_dist.mode().float()
+    lat0 = pipe._normalize_latents(enc, vae32.latents_mean, vae32.latents_std).repeat(1, 1, lf, 1, 1)
+    mask = torch.zeros((1, 1, lf, lh, lw), device=dev, dtype=torch.float32)
+    mask[:, :, 0] = 1.0
+    noise = torch.randn(lat0.shape, generator=g, device=dev, dtype=torch.float32)
+    lat = pipe._pack_latents(lat0 * mask + noise * (1 - mask), sp, st)
+    out = pipe(image=None, latents=lat, prompt=None, negative_prompt=None,
+               prompt_embeds=pe.to(dev, dtype), prompt_attention_mask=pam.to(dev),
+               negative_prompt_embeds=npe.to(dev, dtype), negative_prompt_attention_mask=npam.to(dev),
+               width=W, height=H, num_frames=F, frame_rate=24, num_inference_steps=steps, guidance_scale=3.0,
+               generator=g, output_type="latent").frames
+    lat = pipe._unpack_latents(out, lf, lh, lw, sp, st)
+    lat = pipe._denormalize_latents(lat, vae32.latents_mean, vae32.latents_std, vae32.config.scaling_factor).float()
+    if not torch.isfinite(lat).all():
+        raise RuntimeError("LTX 去噪結果含 NaN/Inf (FP16 溢位)")
+    ts = None
+    if vae32.config.timestep_conditioning:
+        n2 = torch.randn(lat.shape, generator=g, device=dev, dtype=torch.float32)
+        lat = (1 - decode_noise) * lat + decode_noise * n2
+        ts = torch.tensor([decode_t], device=dev, dtype=torch.float32)
+    with torch.no_grad():
+        video = vae32.decode(lat, ts, return_dict=False)[0]
+    return pipe.video_processor.postprocess_video(video, output_type="pil")[0]
+
 def ltx_preprocess(img, crf):
     # LTX 以壓縮影片訓練；乾淨照片當首幀容易產生「凍結」影片 → 先經過一次 H.264 壓縮
     src, enc = "/content/temp/_ltx_in.png", "/content/temp/_ltx_in.mp4"
@@ -753,7 +784,12 @@ def ltx_preprocess(img, crf):
 def finalize_ai_clip(frames, out_p, add_camera_move=False, shot_idx=1, dur=8.0, src_fps=24):
     # AI 片段 → 8 秒 24fps：動態補幀 (minterpolate) 取代單純拉長，慢動作更順
     tmp_raw, tmp_interp = out_p.replace(".mp4", "_ai.mp4"), out_p.replace(".mp4", "_interp.mp4")
-    export_to_video([_to_u8(f) for f in frames], tmp_raw, fps=src_fps)
+    # 以 OpenCV 寫暫存檔 (不依賴 imageio-ffmpeg)
+    f0 = _to_u8(frames[0])
+    vw = cv2.VideoWriter(tmp_raw, cv2.VideoWriter_fourcc(*"mp4v"), float(src_fps), (f0.shape[1], f0.shape[0]))
+    for f in frames:
+        vw.write(cv2.cvtColor(_to_u8(f), cv2.COLOR_RGB2BGR))
+    vw.release()
     pts = dur / (len(frames) / float(src_fps))
     subprocess.run([
         "ffmpeg", "-y", "-loglevel", "error", "-i", tmp_raw,
@@ -835,7 +871,7 @@ try:
             torch.cuda.empty_cache()
 
     elif "LTX-Video" in gen_mode:
-        from diffusers import LTXImageToVideoPipeline
+        from diffusers import LTXImageToVideoPipeline, AutoencoderKLLTXVideo
         embeds = torch.load("/content/temp/prompt_embeds.pt", map_location="cpu", weights_only=False)
         # 0.9.5 的圖生影片動態遠優於 0.9.0；兩者共用同一個 T5，若 0.9.5 失敗自動退回 0.9.0
         LTX_REPOS = ["Lightricks/LTX-Video-0.9.5", "Lightricks/LTX-Video"]
@@ -844,12 +880,14 @@ try:
 
         def run_ltx(repo):
             print(f"[3C] 正在載入無文字編碼器版 {repo} (text_encoder=None, dtype={infer_dtype}，約 ~5GB RAM)...")
+            # 轉換器 fp16 + CPU offload；VAE 另外以 float32 常駐 GPU (~1.7GB)，避免 fp16 解碼產生負片/亂碼
             pipe = LTXImageToVideoPipeline.from_pretrained(
-                repo, text_encoder=None, tokenizer=None,
+                repo, text_encoder=None, tokenizer=None, vae=None,
                 torch_dtype=infer_dtype, low_cpu_mem_usage=True
             )
             pipe.enable_model_cpu_offload()
-            pipe.vae.enable_tiling()
+            vae32 = AutoencoderKLLTXVideo.from_pretrained(repo, subfolder="vae", torch_dtype=torch.float32, low_cpu_mem_usage=True).to("cuda")
+            vae32.enable_tiling()
             for idx, kf, pe, pam, npe, npam, out_p in shots:
                 best = None
                 # 第 1 次 CRF 30；若畫面幾乎靜止，換種子並加重壓縮 (CRF 40) 重試一次
@@ -857,18 +895,8 @@ try:
                     t0 = time.time()
                     print(f"  -> 第 {idx}/{len(shots)} 段 LTX 動態鏡頭 ({LTX_W}x{LTX_H}, {LTX_F}f, {LTX_STEPS} steps, 首幀 CRF {crf})...")
                     kf_in = ltx_preprocess(kf.resize((LTX_W, LTX_H), Image.Resampling.LANCZOS), crf)
-                    frames = pipe(
-                        image=kf_in,
-                        prompt=None, negative_prompt=None,
-                        prompt_embeds=pe.to("cuda", infer_dtype),
-                        prompt_attention_mask=pam.to("cuda"),
-                        negative_prompt_embeds=npe.to("cuda", infer_dtype),
-                        negative_prompt_attention_mask=npam.to("cuda"),
-                        width=LTX_W, height=LTX_H, num_frames=LTX_F, frame_rate=24,
-                        num_inference_steps=LTX_STEPS, guidance_scale=3.0,
-                        decode_timestep=0.05, decode_noise_scale=0.025,
-                        generator=torch.Generator("cuda").manual_seed(42 + idx + 1000 * attempt)
-                    ).frames[0]
+                    frames = ltx_generate(pipe, vae32, kf_in, LTX_W, LTX_H, LTX_F, LTX_STEPS,
+                                          pe, pam, npe, npam, 42 + idx + 1000 * attempt, "cuda", infer_dtype)
                     check_frames(frames, "LTX-Video")
                     fid = fidelity_check(frames, kf_in, f"{repo} 第 {idx} 鏡")
                     ms = motion_score(frames)
@@ -884,7 +912,7 @@ try:
                 del frames, best
                 gc.collect()
                 torch.cuda.empty_cache()
-            del pipe
+            del pipe, vae32
 
         for ri, repo in enumerate(LTX_REPOS):
             try:
