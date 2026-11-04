@@ -973,6 +973,25 @@ from shot_plan import resolve_shots, output_size
 SHOTS = resolve_shots(cfg, cfg.get("custom_scene_prompt_en", cfg.get("custom_scene_prompt", "")))
 OUT_W, OUT_H = output_size(cfg)
 LANDSCAPE = OUT_W > OUT_H
+def free_ram():
+    # 釋放 Python 物件並把 glibc 堆積還給作業系統 (實測可回收 ~2.7GB)
+    gc.collect()
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+def peak_ram_gb():
+    try:
+        import resource
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1048576.0
+    except Exception:
+        return 0.0
+
+LTX_CHILD = os.environ.get("ESPNER_LTX_REPO", "")
+CHILD_STATUS = "/content/temp/stage3c_child_status.json"
+
 def shot_mp4(sid):
     return f"/content/temp/raw_shot{sid}.mp4"
 vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3) if torch.cuda.is_available() else 15.0
@@ -1336,8 +1355,8 @@ try:
             torch.cuda.empty_cache()
 
     elif "LTX-Video" in gen_mode:
-        from diffusers import LTXImageToVideoPipeline, AutoencoderKLLTXVideo
-        embeds = torch.load("/content/temp/prompt_embeds.pt", map_location="cpu", weights_only=False)
+        from diffusers import LTXImageToVideoPipeline, AutoencoderKLLTXVideo, LTXVideoTransformer3DModel
+        embeds = torch.load("/content/temp/prompt_embeds.pt", map_location="cpu", weights_only=False) if LTX_CHILD else {}
         # 0.9.5 的圖生影片動態遠優於 0.9.0；兩者共用同一個 T5，若 0.9.5 失敗自動退回 0.9.0
         LTX_REPOS = ["Lightricks/LTX-Video-0.9.5", "Lightricks/LTX-Video"]
         LTX_W, LTX_H, LTX_STEPS = (832, 480, 30) if LANDSCAPE else (480, 832, 30)
@@ -1346,18 +1365,22 @@ try:
             # 直接生成整段長度 (8k+1 格)，不靠補幀拉長 → 避免殘影；上限 145 格 (6 秒) 以控制 T4 時間
             n = int(round(dur * 24))
             return min(145, ((n - 1 + 7) // 8) * 8 + 1)
-        shots = [(sid, KFS[sid], embeds[sid]["pe"], embeds[sid]["pam"], embeds[sid]["npe"], embeds[sid]["npam"], shot_mp4(sid)) for sid in KFS]
+        shots = [(sid, KFS[sid], embeds[sid]["pe"], embeds[sid]["pam"], embeds[sid]["npe"], embeds[sid]["npam"], shot_mp4(sid)) for sid in KFS] if LTX_CHILD else []
 
         def run_ltx(repo):
             print(f"[3C] 正在載入無文字編碼器版 {repo} (text_encoder=None, dtype={infer_dtype}，約 ~5GB RAM)...")
-            # 轉換器 fp16 + CPU offload；VAE 另外以 float32 常駐 GPU (~1.7GB)，避免 fp16 解碼產生負片/亂碼
-            pipe = LTXImageToVideoPipeline.from_pretrained(
-                repo, text_encoder=None, tokenizer=None, vae=None,
-                torch_dtype=infer_dtype, low_cpu_mem_usage=True
-            )
-            pipe.enable_model_cpu_offload()
+            # 系統 RAM 只有 12.7GB：先載 VAE(fp32) 並立刻搬上 GPU，再把轉換器(fp16) 直接逐片載入 GPU (device_map)。
+            # 2B 轉換器 3.9GB + VAE 2.5GB ≈ 6.4GB VRAM，T4 15GB 放得下，因此不需 CPU offload，系統 RAM 峰值大幅下降。
             vae32 = AutoencoderKLLTXVideo.from_pretrained(repo, subfolder="vae", torch_dtype=torch.float32, low_cpu_mem_usage=True).to("cuda")
             vae32.enable_tiling()
+            free_ram()
+            tr = LTXVideoTransformer3DModel.from_pretrained(repo, subfolder="transformer", torch_dtype=infer_dtype, low_cpu_mem_usage=True, device_map="cuda")
+            free_ram()
+            pipe = LTXImageToVideoPipeline.from_pretrained(
+                repo, transformer=tr, text_encoder=None, tokenizer=None, vae=None, torch_dtype=infer_dtype
+            )
+            free_ram()
+            print(f"     模型載入完成｜系統 RAM 峰值 {peak_ram_gb():.1f} GB")
             for idx, kf, pe, pam, npe, npam, out_p in shots:
                 best = None
                 # 第 1 次 CRF 30；若畫面幾乎靜止，換種子並加重壓縮 (CRF 40) 重試一次
@@ -1387,19 +1410,31 @@ try:
                 torch.cuda.empty_cache()
             del pipe, vae32
 
-        for ri, repo in enumerate(LTX_REPOS):
-            try:
-                STATUS["shots"] = []
-                run_ltx(repo)
-                STATUS["engine"] = repo
-                break
-            except Exception as e:
-                if ri == len(LTX_REPOS) - 1:
-                    raise
-                print(f"[3C] ⚠️ {repo} 失敗 ({e})，自動改用 {LTX_REPOS[ri + 1]} 重試...")
-                traceback.print_exc()
-                gc.collect()
-                torch.cuda.empty_cache()
+        if LTX_CHILD:
+            # 子程序：只跑指定的模型版本，結束時作業系統 100% 回收記憶體
+            STATUS["shots"] = []
+            run_ltx(LTX_CHILD)
+            STATUS["engine"] = LTX_CHILD
+        else:
+            # 每個模型版本各開一個獨立子程序：失敗的版本不會殘留在 RAM，再載入下一版也不會爆記憶體
+            last_err = None
+            for ri, repo in enumerate(LTX_REPOS):
+                if os.path.exists(CHILD_STATUS):
+                    os.remove(CHILD_STATUS)
+                rc = subprocess.run([sys.executable, "-u", os.path.abspath(__file__)], env={**os.environ, "ESPNER_LTX_REPO": repo}).returncode
+                child = {}
+                if os.path.exists(CHILD_STATUS):
+                    with open(CHILD_STATUS, "r", encoding="utf-8") as _f:
+                        child = json.load(_f)
+                if rc == 0 and child.get("ai_ok"):
+                    STATUS["shots"] = child.get("shots", [])
+                    STATUS["engine"] = child.get("engine")
+                    break
+                last_err = child.get("error") or f"子程序結束碼 {rc} (可能記憶體不足)"
+                if ri < len(LTX_REPOS) - 1:
+                    print(f"[3C] ⚠️ {repo} 失敗 ({last_err})，自動改用 {LTX_REPOS[ri + 1]} 重試 (新子程序)...")
+            else:
+                raise RuntimeError(last_err or "LTX 全部版本失敗")
 
     else:
         print("[3C] 正在載入 SVD-XT 純圖生影片模型 (無文字編碼器，僅需 ~4.2GB RAM)...")
@@ -1430,11 +1465,18 @@ except Exception as e:
     STATUS["error"] = f"{type(e).__name__}: {e}"
     print(f"\n⚠️ [3C] AI 擴散引擎發生例外 ({e})，完整診斷訊息如下：")
     traceback.print_exc()
+    if LTX_CHILD:
+        raise SystemExit(1)
     print("\n🔄 正在自動啟動真人配戴首幀 2.5D 視差運鏡保底合成，確保廣告順利產出...")
     render_3d_motion_fallback()
 finally:
-    with open("/content/temp/stage3c_status.json", "w", encoding="utf-8") as f:
+    with open(CHILD_STATUS if LTX_CHILD else "/content/temp/stage3c_status.json", "w", encoding="utf-8") as f:
         json.dump(STATUS, f, ensure_ascii=False, indent=2)
+    try:
+        import resource
+        print(f"[3C] {'子程序' if LTX_CHILD else '主程序'}記憶體峰值：{resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1048576:.1f} GB")
+    except Exception:
+        pass
 """
 
 def cell_lines(code):
@@ -3856,8 +3898,9 @@ cells = [
             "\n",
             "# 若執行階段曾重啟，自動確保 diffusers==0.38.0 已安裝\n",
             "try:\n",
-            "    import diffusers\n",
-            "    assert diffusers.__version__ == \"0.38.0\"\n",
+            "    # 只查版本號，不在筆記本主程序 import diffusers/torch (省下 ~1GB 系統 RAM 給子程序)\n",
+            "    from importlib.metadata import version as _ver\n",
+            "    assert _ver(\"diffusers\") == \"0.38.0\"\n",
             "except Exception:\n",
             "    print(\"📦 偵測到執行階段剛重啟，正在自動補齊 Diffusers 0.38 套件...\")\n",
             "    subprocess.run([\n",
@@ -3912,6 +3955,13 @@ cells = [
             "        print(line, end=\"\", flush=True)\n",
             "        output_lines.append(line)\n",
             "    proc.wait()\n",
+            "    try:\n",
+            "        import resource\n",
+            "        print(f\"📊 目前為止子程序記憶體峰值：{resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / 1048576:.1f} GB (上限 12.7 GB)\")\n",
+            "    except Exception:\n",
+            "        pass\n",
+            "    if proc.returncode in (-9, 137):\n",
+            "        raise RuntimeError(f\"❌ {stage_title} 被系統強制終止：系統 RAM 用盡。請截圖此訊息與上方的記憶體峰值給開發者。\")\n",
             "    if proc.returncode != 0:\n",
             "        err_tail = \"\".join(output_lines[-30:])\n",
             "        raise RuntimeError(f\"❌ {stage_title} 執行失敗 (exit={proc.returncode}):\\n{err_tail}\")\n",

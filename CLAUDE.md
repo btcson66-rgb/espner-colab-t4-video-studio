@@ -31,6 +31,7 @@ This repository contains the **ESPNER Colab T4 Luxury Commercial Video Studio** 
    - **CRITICAL**: Tesla T4 is Compute Capability `7.5` (`sm_75`). It does **NOT** support `torch.bfloat16` in PyTorch's CUTLASS / FlashAttention (`scaled_dot_product_attention`) kernels — using `bfloat16` on T4 throws `RuntimeError: cutlassF: no kernel found to launch!`.
    - Always check `cc_major = torch.cuda.get_device_capability(0)[0]` and use **`torch.float16`** when `cc_major < 8` (`infer_dtype = torch.float16 if cc_major < 8 else torch.bfloat16`).
    - Always enable `pipe.enable_model_cpu_offload()` and `pipe.vae.enable_tiling()`.
+   - **Exception — LTX in 3C (RAM-measured):** loading the LTX pipeline into CPU RAM for offload peaked at ~7.5 GB, plus ~3.4 GB for the fp32 VAE (≈10.9 GB), which crashed Colab. So 3C loads the fp32 VAE first and moves it to CUDA, then loads the fp16 transformer with `device_map="cuda"` (≈6.4 GB VRAM total, no CPU offload), calling `free_ram()` (gc + `malloc_trim`) between loads. Each LTX repo attempt runs in its own child process (`ESPNER_LTX_REPO`), so a failed attempt can never stay resident in RAM.
 3. **Subprocess Output Streaming in Colab (`ipykernel`)**:
    - In Colab notebooks, `subprocess.run(..., check=True)` hides child stdout/stderr from the notebook cell UI. Always use `run_stage()` with `subprocess.Popen(..., stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)` to stream logs live to the cell output.
 
