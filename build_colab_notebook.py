@@ -699,7 +699,6 @@ if "方案 2" in gen_mode:
 
 KFS = {sh["id"]: Image.open(f"/content/temp/keyframe_shot{sh['id']}.png").convert("RGB") for sh in SHOTS}
 DURS = {sh["id"]: sh["dur"] for sh in SHOTS}
-from diffusers.utils import export_to_video
 
 def check_frames(frames, tag):
     arr = np.asarray(frames[len(frames) // 2]).astype(np.float32)
@@ -726,6 +725,52 @@ def motion_score(frames):
     step_diff = float(np.mean([np.abs(g[i + 1] - g[i]).mean() for i in range(len(g) - 1)])) * 4.0
     return max(end_diff, step_diff)
 
+def fidelity_check(frames, kf_img, tag):
+    # 圖生影片的第 1 格必須跟輸入首幀幾乎一樣；顏色反轉 (負片) 會得到負相關，亂碼色塊則連續性很低
+    def g(x):
+        return cv2.resize(cv2.cvtColor(_to_u8(x), cv2.COLOR_RGB2GRAY), (64, 112)).astype(np.float32).ravel()
+    k = g(np.asarray(kf_img.convert("RGB")))
+    c0 = float(np.corrcoef(k, g(frames[0]))[0, 1])
+    step = max(1, len(frames) // 8)
+    seq = [g(f) for f in frames[::step]]
+    cc = float(np.mean([np.corrcoef(seq[i], seq[i + 1])[0, 1] for i in range(len(seq) - 1)])) if len(seq) > 1 else 1.0
+    print(f"     畫面檢查：首幀相似度 {c0:.2f} (需 ≥ 0.5)｜連續性 {cc:.2f} (需 ≥ 0.55)")
+    if not (c0 >= 0.5 and cc >= 0.55):
+        raise RuntimeError(f"{tag} 輸出畫面異常 (首幀相似度 {c0:.2f}、連續性 {cc:.2f}；可能為顏色反轉或亂碼)")
+    return c0, cc
+
+def ltx_generate(pipe, vae32, kf_in, W, H, F, steps, pe, pam, npe, npam, seed, dev, dtype, decode_t=0.05, decode_noise=0.025):
+    # T4 修正：VAE 編碼/解碼一律在 float32 執行 (fp16 VAE 會讓畫面變負片/亂碼)，轉換器只負責去噪
+    g = torch.Generator(dev).manual_seed(seed)
+    sp, st = pipe.transformer_spatial_patch_size, pipe.transformer_temporal_patch_size
+    lf = (F - 1) // pipe.vae_temporal_compression_ratio + 1
+    lh, lw = H // pipe.vae_spatial_compression_ratio, W // pipe.vae_spatial_compression_ratio
+    img = pipe.video_processor.preprocess(kf_in, height=H, width=W).to(dev, torch.float32)
+    with torch.no_grad():
+        enc = vae32.encode(img.unsqueeze(2)).latent_dist.mode().float()
+    lat0 = pipe._normalize_latents(enc, vae32.latents_mean, vae32.latents_std).repeat(1, 1, lf, 1, 1)
+    mask = torch.zeros((1, 1, lf, lh, lw), device=dev, dtype=torch.float32)
+    mask[:, :, 0] = 1.0
+    noise = torch.randn(lat0.shape, generator=g, device=dev, dtype=torch.float32)
+    lat = pipe._pack_latents(lat0 * mask + noise * (1 - mask), sp, st)
+    out = pipe(image=None, latents=lat, prompt=None, negative_prompt=None,
+               prompt_embeds=pe.to(dev, dtype), prompt_attention_mask=pam.to(dev),
+               negative_prompt_embeds=npe.to(dev, dtype), negative_prompt_attention_mask=npam.to(dev),
+               width=W, height=H, num_frames=F, frame_rate=24, num_inference_steps=steps, guidance_scale=3.0,
+               generator=g, output_type="latent").frames
+    lat = pipe._unpack_latents(out, lf, lh, lw, sp, st)
+    lat = pipe._denormalize_latents(lat, vae32.latents_mean, vae32.latents_std, vae32.config.scaling_factor).float()
+    if not torch.isfinite(lat).all():
+        raise RuntimeError("LTX 去噪結果含 NaN/Inf (FP16 溢位)")
+    ts = None
+    if vae32.config.timestep_conditioning:
+        n2 = torch.randn(lat.shape, generator=g, device=dev, dtype=torch.float32)
+        lat = (1 - decode_noise) * lat + decode_noise * n2
+        ts = torch.tensor([decode_t], device=dev, dtype=torch.float32)
+    with torch.no_grad():
+        video = vae32.decode(lat, ts, return_dict=False)[0]
+    return pipe.video_processor.postprocess_video(video, output_type="pil")[0]
+
 def ltx_preprocess(img, crf):
     # LTX 以壓縮影片訓練；乾淨照片當首幀容易產生「凍結」影片 → 先經過一次 H.264 壓縮
     src, enc = "/content/temp/_ltx_in.png", "/content/temp/_ltx_in.mp4"
@@ -739,7 +784,12 @@ def ltx_preprocess(img, crf):
 def finalize_ai_clip(frames, out_p, add_camera_move=False, shot_idx=1, dur=8.0, src_fps=24):
     # AI 片段 → 8 秒 24fps：動態補幀 (minterpolate) 取代單純拉長，慢動作更順
     tmp_raw, tmp_interp = out_p.replace(".mp4", "_ai.mp4"), out_p.replace(".mp4", "_interp.mp4")
-    export_to_video([_to_u8(f) for f in frames], tmp_raw, fps=src_fps)
+    # 以 OpenCV 寫暫存檔 (不依賴 imageio-ffmpeg)
+    f0 = _to_u8(frames[0])
+    vw = cv2.VideoWriter(tmp_raw, cv2.VideoWriter_fourcc(*"mp4v"), float(src_fps), (f0.shape[1], f0.shape[0]))
+    for f in frames:
+        vw.write(cv2.cvtColor(_to_u8(f), cv2.COLOR_RGB2BGR))
+    vw.release()
     pts = dur / (len(frames) / float(src_fps))
     subprocess.run([
         "ffmpeg", "-y", "-loglevel", "error", "-i", tmp_raw,
@@ -811,6 +861,7 @@ try:
                 generator=torch.Generator(device="cuda").manual_seed(20261103 + idx)
             ).frames[0]
             check_frames(frames, "Wan2.2")
+            fidelity_check(frames, kf_in, f"Wan2.2 第 {idx} 鏡")
             ms = motion_score(frames)
             finalize_ai_clip(frames, out_p, add_camera_move=ms < MOTION_MIN, shot_idx=idx, dur=DURS[idx])
             STATUS["shots"].append({"shot": idx, "motion": round(ms, 2)})
@@ -820,7 +871,7 @@ try:
             torch.cuda.empty_cache()
 
     elif "LTX-Video" in gen_mode:
-        from diffusers import LTXImageToVideoPipeline
+        from diffusers import LTXImageToVideoPipeline, AutoencoderKLLTXVideo
         embeds = torch.load("/content/temp/prompt_embeds.pt", map_location="cpu", weights_only=False)
         # 0.9.5 的圖生影片動態遠優於 0.9.0；兩者共用同一個 T5，若 0.9.5 失敗自動退回 0.9.0
         LTX_REPOS = ["Lightricks/LTX-Video-0.9.5", "Lightricks/LTX-Video"]
@@ -829,12 +880,14 @@ try:
 
         def run_ltx(repo):
             print(f"[3C] 正在載入無文字編碼器版 {repo} (text_encoder=None, dtype={infer_dtype}，約 ~5GB RAM)...")
+            # 轉換器 fp16 + CPU offload；VAE 另外以 float32 常駐 GPU (~1.7GB)，避免 fp16 解碼產生負片/亂碼
             pipe = LTXImageToVideoPipeline.from_pretrained(
-                repo, text_encoder=None, tokenizer=None,
+                repo, text_encoder=None, tokenizer=None, vae=None,
                 torch_dtype=infer_dtype, low_cpu_mem_usage=True
             )
             pipe.enable_model_cpu_offload()
-            pipe.vae.enable_tiling()
+            vae32 = AutoencoderKLLTXVideo.from_pretrained(repo, subfolder="vae", torch_dtype=torch.float32, low_cpu_mem_usage=True).to("cuda")
+            vae32.enable_tiling()
             for idx, kf, pe, pam, npe, npam, out_p in shots:
                 best = None
                 # 第 1 次 CRF 30；若畫面幾乎靜止，換種子並加重壓縮 (CRF 40) 重試一次
@@ -842,19 +895,10 @@ try:
                     t0 = time.time()
                     print(f"  -> 第 {idx}/{len(shots)} 段 LTX 動態鏡頭 ({LTX_W}x{LTX_H}, {LTX_F}f, {LTX_STEPS} steps, 首幀 CRF {crf})...")
                     kf_in = ltx_preprocess(kf.resize((LTX_W, LTX_H), Image.Resampling.LANCZOS), crf)
-                    frames = pipe(
-                        image=kf_in,
-                        prompt=None, negative_prompt=None,
-                        prompt_embeds=pe.to("cuda", infer_dtype),
-                        prompt_attention_mask=pam.to("cuda"),
-                        negative_prompt_embeds=npe.to("cuda", infer_dtype),
-                        negative_prompt_attention_mask=npam.to("cuda"),
-                        width=LTX_W, height=LTX_H, num_frames=LTX_F, frame_rate=24,
-                        num_inference_steps=LTX_STEPS, guidance_scale=3.0,
-                        decode_timestep=0.05, decode_noise_scale=0.025,
-                        generator=torch.Generator("cuda").manual_seed(42 + idx + 1000 * attempt)
-                    ).frames[0]
+                    frames = ltx_generate(pipe, vae32, kf_in, LTX_W, LTX_H, LTX_F, LTX_STEPS,
+                                          pe, pam, npe, npam, 42 + idx + 1000 * attempt, "cuda", infer_dtype)
                     check_frames(frames, "LTX-Video")
+                    fid = fidelity_check(frames, kf_in, f"{repo} 第 {idx} 鏡")
                     ms = motion_score(frames)
                     print(f"     動態量 motion={ms:.2f} (門檻 {MOTION_MIN})，耗時 {time.time() - t0:.1f}s")
                     if best is None or ms > best[0]:
@@ -863,12 +907,12 @@ try:
                         break
                     print("     ⚠️ 畫面幾乎靜止，換種子並加重首幀壓縮重試...")
                 finalize_ai_clip(best[1], out_p, add_camera_move=best[0] < MOTION_MIN, shot_idx=idx, dur=DURS[idx])
-                STATUS["shots"].append({"shot": idx, "motion": round(best[0], 2)})
+                STATUS["shots"].append({"shot": idx, "motion": round(best[0], 2), "first_frame_sim": round(fid[0], 2), "continuity": round(fid[1], 2)})
                 print(f"     ✓ 第 {idx} 段完成 (motion={best[0]:.2f})")
                 del frames, best
                 gc.collect()
                 torch.cuda.empty_cache()
-            del pipe
+            del pipe, vae32
 
         for ri, repo in enumerate(LTX_REPOS):
             try:
@@ -899,6 +943,7 @@ try:
             frames = pipe(kf_in, decode_chunk_size=2, num_frames=25, motion_bucket_id=160, noise_aug_strength=0.03,
                           generator=torch.Generator("cuda").manual_seed(7 + idx)).frames[0]
             check_frames(frames, "SVD-XT")
+            fidelity_check(frames, kf_in, f"SVD-XT 第 {idx} 鏡")
             ms = motion_score(frames)
             finalize_ai_clip(frames, out_p, add_camera_move=ms < MOTION_MIN, shot_idx=idx, dur=DURS[idx], src_fps=8)
             STATUS["shots"].append({"shot": idx, "motion": round(ms, 2)})
@@ -2537,7 +2582,7 @@ def iter_reference_timeline():
         if ci is not None and ci < len(copies) and copies[ci]:
             lines = [x for x in copies[ci].split("/") if x.strip()]
             layer = T.render_copy_layer(W, H, lines, brand_mark=False, align="left")
-            if T.text_color_for(frames[len(frames) // 2], layer) == "light":
+            if T.text_color_for(G.grade_frame(frames[len(frames) // 2], plan["grade"], lut=lut, strength=0.5), layer) == "light":
                 layer = T.render_copy_layer(W, H, lines, brand_mark=False, align="left", color="light")
         for i, fr in enumerate(frames):
             t = i / 24.0
@@ -2906,8 +2951,8 @@ cells = [
             "    with open(_st_p, \"r\", encoding=\"utf-8\") as _f:\n",
             "        _st = json.load(_f)\n",
             "    if _st.get(\"ai_ok\"):\n",
-            "        _m = \", \".join(f\"第{x['shot']}段 motion={x['motion']}\" for x in _st.get(\"shots\", []))\n",
-            "        print(f\"\\n✅ AI 動態影片完成｜引擎：{_st.get('engine')}｜{_m}\")\n",
+            "        _m = \"\\n   \".join(f\"第{x['shot']}鏡：動態 {x['motion']}｜首幀相似度 {x.get('first_frame_sim', '-')}｜連續性 {x.get('continuity', '-')}\" for x in _st.get(\"shots\", []))\n",
+            "        print(f\"\\n✅ AI 動態影片完成｜引擎：{_st.get('engine')}\\n   {_m}\")\n",
             "        print(\"   (motion ≥ 3 代表人物/鏡頭有明顯動作；低於 3 時已自動重試並疊加推軌運鏡)\")\n",
             "    else:\n",
             "        print(\"\\n⚠️ 注意：AI 影片模型未成功，本次使用『2.5D 視差運鏡』保底畫面 (人物不會有肢體動作)。\")\n",
