@@ -111,15 +111,16 @@ STYLE_PLANS = {
         "subject": "a young East Asian woman with a sleek black bob haircut with bangs, natural makeup, wearing a white linen shirt",
         "look": "warm golden hour light, soft film look, natural skin texture, 35mm photo, photorealistic",
         "endcard": "split", "endcard_dur": 6.0, "brand_mark": "top-left", "mood": "warm", "grade": "A_warm_film",
+        "copy_default": ["你有多久，/沒好好看看世界？", "今天，/為自己出發。", "把目光，/還給世界。"],
         "shots": [
             {"framing": "Medium shot", "scene": "sitting at an old wooden desk beside a large sunlit window in a cozy creative studio apartment, city rooftops outside the window", "wear": False, "closeup": False, "dur": 6.0, "copy": 0,
-             "motion": "She gazes out of the window, takes a slow breath, then closes the laptop and stands up, warm sunlight flickers through the window, the camera slowly dollies in, cinematic."},
+             "motion": "She sits calmly by the window and slowly turns her head toward the soft sunlight, a gentle breath, strands of hair move slightly, warm light flickers softly through the window, the camera slowly and smoothly dollies in, subtle natural motion, stable framing, cinematic."},
             {"framing": "Medium shot", "scene": "standing in a quiet old alley beside a weathered white wall with dappled tree-leaf shadows, warm afternoon sun", "wear": True, "closeup": False, "dur": 6.0, "copy": 1,
-             "motion": "She walks slowly along the wall toward the camera, leaf shadows drift across her face and the lenses, she smiles softly, the camera tracks backward smoothly, cinematic."},
+             "motion": "She stands relaxed by the sunlit wall facing the camera and smiles softly, dappled leaf shadows drift slowly across her face and the lenses, hair moves gently in the breeze, the camera slowly pushes in, subtle natural motion, stable framing, cinematic."},
             {"framing": "Close-up portrait", "scene": "beside a weathered white wall with dappled leaf shadows, warm afternoon sun", "wear": True, "closeup": True, "dur": 6.0, "copy": None,
-             "motion": "Close-up: she turns her face toward the camera and smiles, leaf shadows move across her face, a light breeze moves her hair, the camera pushes in slowly, cinematic."},
+             "motion": "Close-up: she faces the camera with a calm confident expression and a slight smile, soft leaf shadows glide across her face, a light breeze moves a few strands of hair, the camera pushes in very slowly, subtle natural motion, stable framing, cinematic."},
             {"framing": "Medium shot", "scene": "standing on a grassy seaside path at sunset, calm sea and low setting sun behind her", "wear": True, "closeup": False, "dur": 6.0, "copy": 2,
-             "motion": "She turns and walks slowly along the coast, then looks toward the sunset, hair moving in the sea breeze, warm backlight, the camera tracks alongside, cinematic."},
+             "motion": "She stands on the seaside path facing the camera, the sea breeze moves her hair and shirt gently, warm sunset backlight shimmers on the water behind her, the camera slowly arcs to the side, subtle natural motion, stable framing, cinematic."},
         ],
     },
     "B_COASTAL_30S": {
@@ -128,13 +129,13 @@ STYLE_PLANS = {
         "endcard": "studio", "endcard_dur": 10.0, "brand_mark": "top-center", "mood": "airy", "grade": "B_bright_natural",
         "shots": [
             {"framing": "Extreme close-up portrait", "scene": "on a sunny Mediterranean coastal cliff, deep blue sea and clear sky behind", "wear": True, "closeup": True, "dur": 5.0, "copy": None,
-             "motion": "Extreme close-up: he slowly turns his face toward the camera, the mirrored lenses reflect the sea and sky, a gentle breeze moves his hair, the camera slowly pulls back, cinematic."},
+             "motion": "Extreme close-up: he faces the camera with a calm confident look, the mirrored lenses reflect the sea and sky, a gentle breeze moves his hair slightly, the camera slowly pulls back, subtle natural motion, stable framing, cinematic."},
             {"framing": "Medium shot", "scene": "standing on a sunlit limestone coastal terrace, bright blue sea and horizon behind", "wear": True, "closeup": False, "dur": 5.0, "copy": None,
-             "motion": "He stands relaxed, then turns his head to look over the sea, the linen shirt moves in the wind, bright sunlight, the camera slowly orbits around him, cinematic."},
+             "motion": "He stands relaxed facing the camera on the sunlit terrace, the linen shirt ripples gently in the wind, sparkling sea behind him, the camera slowly orbits a little to the side, subtle natural motion, stable framing, cinematic."},
             {"framing": "Medium-wide shot", "scene": "on a sunlit limestone coastal path, bright blue sea behind", "wear": True, "closeup": False, "dur": 5.0, "copy": None,
-             "motion": "He walks along the coastal path, the shirt moves in the wind, he glances toward the sea, the camera tracks alongside smoothly, cinematic."},
+             "motion": "He stands on the coastal path facing the camera, the shirt moves gently in the wind, waves roll softly behind him, the camera slowly dollies in, subtle natural motion, stable framing, cinematic."},
             {"framing": "Close-up portrait", "scene": "on a sunny Mediterranean coast, bright sea behind", "wear": True, "closeup": True, "dur": 5.0, "copy": None,
-             "motion": "Hero shot: he turns to face the camera with a confident look, the mirrored lenses reflect the bright sea, the camera pushes in slowly, cinematic."},
+             "motion": "Hero shot: he looks into the camera with a confident look, the mirrored lenses reflect the bright sea, a light breeze moves his hair, the camera pushes in slowly, subtle natural motion, stable framing, cinematic."},
         ],
     },
 }
@@ -237,6 +238,411 @@ def resolve_shots(cfg, custom_en=""):
 def output_size(cfg):
     # (寬, 高)：9:16 = 720x1280；16:9 = 1920x1080
     return (1920, 1080) if cfg.get("aspect", "9:16") == "16:9" else (720, 1280)
+"""
+
+TRACK_CODE = r"""
+# espner_track.py - keep the product's REAL glasses on the face through a generated clip.
+# Deps: numpy, opencv-python-headless (<5). No triple double quotes in this file on purpose.
+#
+# Method: sparse LK tracking (half resolution) of face/hair features AROUND the glasses
+# (glasses area masked out), per-frame similarity (frame0 -> frame i) fitted with RANSAC
+# from points that carry their frame-0 coordinates (no matrix-product drift), periodic
+# direct re-anchoring to frame 0, zero-phase One-Euro smoothing, confidence-driven fade,
+# premultiplied-alpha warp + soft contact shadow composite.
+import time
+import numpy as np
+import cv2
+
+cv2.setNumThreads(1)
+
+_LK = dict(winSize=(21, 21), maxLevel=3,
+           criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 20, 0.01))
+_LK_WIDE = dict(winSize=(31, 31), maxLevel=4,
+                criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
+
+
+def _apply(M, pts):
+    # M: 2x3, pts: Nx2
+    return pts @ M[:, :2].T + M[:, 2]
+
+
+def _inv(M):
+    return cv2.invertAffineTransform(M)
+
+
+def _params_from_M(M, c0):
+    A = M[:, :2]
+    s = float(np.sqrt(abs(np.linalg.det(A))) + 1e-9)
+    ang = float(np.arctan2(A[1, 0], A[0, 0]))
+    c = _apply(M, np.asarray(c0, np.float64)[None])[0]
+    return np.array([c[0], c[1], np.log(s), ang])
+
+
+def _M_from_params(p, c0):
+    s = np.exp(p[2])
+    ca, sa = np.cos(p[3]) * s, np.sin(p[3]) * s
+    A = np.array([[ca, -sa], [sa, ca]])
+    c0 = np.asarray(c0, np.float64)
+    t = np.array([p[0], p[1]]) - A @ c0
+    return np.hstack([A, t[:, None]])
+
+
+class _OneEuro:
+    def __init__(self, fps, min_cutoff, beta, dcutoff=1.0):
+        self.fps, self.mc, self.beta, self.dc = fps, min_cutoff, beta, dcutoff
+
+    def _alpha(self, cutoff):
+        tau = 1.0 / (2 * np.pi * cutoff)
+        return 1.0 / (1.0 + tau * self.fps)
+
+    def run(self, x):
+        # x: N x D (D channels in px-equivalent units)
+        out = np.empty_like(x)
+        out[0] = x[0]
+        dx_prev = np.zeros(x.shape[1])
+        for i in range(1, len(x)):
+            dx = (x[i] - out[i - 1]) * self.fps
+            a_d = self._alpha(self.dc)
+            dx_hat = a_d * dx + (1 - a_d) * dx_prev
+            dx_prev = dx_hat
+            cutoff = self.mc + self.beta * np.abs(dx_hat)
+            a = np.array([self._alpha(c) for c in cutoff])
+            out[i] = a * x[i] + (1 - a) * out[i - 1]
+        return out
+
+
+def _smooth_params(P, R, fps, min_cutoff=2.0, beta=0.05):
+    # zero-phase: filter forward and backward, average. Work in px-equivalent units.
+    X = P.copy()
+    X[:, 2] *= R
+    X[:, 3] *= R
+    f = _OneEuro(fps, min_cutoff, beta)
+    a = f.run(X)
+    b = f.run(X[::-1].copy())[::-1]
+    Y = 0.5 * (a + b)
+    Y[:, 2] /= R
+    Y[:, 3] /= R
+    return Y
+
+
+def _roi_polys(c0, gw, gh, face_box, shape_full):
+    # returns (roi_ellipse_params, glasses_exclusion_rect) in frame-0 full-res coords
+    H, W = shape_full
+    if face_box is not None:
+        fx, fy, fw, fh = face_box
+        cx, cy = fx + fw / 2.0, fy + fh / 2.0
+        rw, rh = fw * 0.75, fh * 0.75
+    else:
+        cx, cy = c0[0], c0[1] + gh * 0.6
+        rw, rh = gw * 1.7, gw * 2.0
+    ex = 0.22 * gw
+    exclude = (c0[0] - gw / 2 - ex, c0[1] - gh / 2 - ex * 0.8,
+               c0[0] + gw / 2 + ex, c0[1] + gh / 2 + ex * 0.8)
+    return (cx, cy, rw, rh), exclude
+
+
+def _make_mask(M_full, roi, excl, shape_half, s):
+    # draw ROI ellipse and glasses exclusion at the current pose, in half-res coords
+    h, w = shape_half
+    cx, cy, rw, rh = roi
+    th = np.linspace(0, 2 * np.pi, 48, endpoint=False)
+    ell = np.stack([cx + rw * np.cos(th), cy + rh * np.sin(th)], 1)
+    x0, y0, x1, y1 = excl
+    box = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], np.float64)
+    m = np.zeros((h, w), np.uint8)
+    e = (_apply(M_full, ell) * s).astype(np.int32)
+    cv2.fillConvexPoly(m, e, 255)
+    b = (_apply(M_full, box) * s).astype(np.int32)
+    cv2.fillConvexPoly(m, b, 0)
+    return m
+
+
+def _sharp(gray, mask):
+    lap = cv2.Laplacian(cv2.GaussianBlur(gray, (3, 3), 0), cv2.CV_16S, ksize=3)
+    v = np.abs(lap)
+    sel = mask > 0
+    return float(v[sel].mean()) + 1e-6 if sel.any() else 1e-6
+
+
+def _fit(p0, p1, thr=2.0):
+    if len(p0) < 4:
+        return None, None
+    M, inl = cv2.estimateAffinePartial2D(p0.reshape(-1, 1, 2), p1.reshape(-1, 1, 2),
+                                         method=cv2.RANSAC, ransacReprojThreshold=thr,
+                                         maxIters=400, confidence=0.99, refineIters=10)
+    if M is None:
+        return None, None
+    return M.astype(np.float64), inl.ravel().astype(bool)
+
+
+def _detect(gray, mask, n, existing=None):
+    m = mask.copy()
+    if existing is not None and len(existing):
+        for p in existing:
+            cv2.circle(m, (int(p[0]), int(p[1])), 5, 0, -1)
+    pts = cv2.goodFeaturesToTrack(gray, maxCorners=n, qualityLevel=0.01, minDistance=6,
+                                  mask=m, blockSize=5)
+    if pts is None:
+        return np.zeros((0, 2), np.float32)
+    return pts.reshape(-1, 2).astype(np.float32)
+
+
+def _lk_fb(g_a, g_b, pa, fb_thr, init=None, wide=False):
+    kw = _LK_WIDE if wide else _LK
+    if init is not None:
+        pb, st, _ = cv2.calcOpticalFlowPyrLK(g_a, g_b, pa.reshape(-1, 1, 2), init.reshape(-1, 1, 2),
+                                             flags=cv2.OPTFLOW_USE_INITIAL_FLOW, **kw)
+        back, st2, _ = cv2.calcOpticalFlowPyrLK(g_b, g_a, pb, pa.reshape(-1, 1, 2).copy(),
+                                                flags=cv2.OPTFLOW_USE_INITIAL_FLOW, **kw)
+    else:
+        pb, st, _ = cv2.calcOpticalFlowPyrLK(g_a, g_b, pa.reshape(-1, 1, 2), None, **kw)
+        back, st2, _ = cv2.calcOpticalFlowPyrLK(g_b, g_a, pb, None, **kw)
+    pb = pb.reshape(-1, 2)
+    back = back.reshape(-1, 2)
+    ok = (st.ravel() == 1) & (st2.ravel() == 1)
+    ok &= np.linalg.norm(back - pa, axis=1) < fb_thr
+    return pb, ok
+
+
+def _cleanup_patch(bg8, a_full, ring_r):
+    # replace bright melted residue in a ring around the real glasses by inpainted skin/hair.
+    # all mask work at half res for speed; blend back at full res.
+    h, w = bg8.shape[:2]
+    hw, hh = max(2, w // 2), max(2, h // 2)
+    sm = cv2.resize(bg8, (hw, hh), interpolation=cv2.INTER_AREA)
+    a = cv2.resize(a_full, (hw, hh), interpolation=cv2.INTER_AREA)
+    k = max(1, int(ring_r * 0.5))
+    ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1))
+    core = (a > 0.3).astype(np.uint8)
+    near = cv2.dilate(core, ker)
+    ring = (near > 0) & (a <= 0.5)
+    k2 = max(2, int(ring_r * 0.9))
+    far = cv2.dilate(core, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k2 + 1, 2 * k2 + 1)))
+    band = (far > 0) & (near == 0)
+    if band.sum() < 30:
+        return bg8
+    lum = cv2.GaussianBlur(cv2.cvtColor(sm, cv2.COLOR_BGR2GRAY).astype(np.float32), (0, 0), 1.0)
+    ref = float(np.percentile(lum[band], 60))
+    anom = ring & (lum > ref + 22)
+    if anom.sum() < 10:
+        return bg8
+    anom = (cv2.dilate(anom.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0) & ring
+    hm = ((anom | (core > 0)).astype(np.uint8)) * 255
+    qs = cv2.resize(sm, (max(2, hw // 2), max(2, hh // 2)), interpolation=cv2.INTER_AREA)
+    qm = cv2.resize(hm, (qs.shape[1], qs.shape[0]), interpolation=cv2.INTER_NEAREST)
+    fill = cv2.inpaint(qs, qm, 3, cv2.INPAINT_TELEA)
+    wt = np.minimum(1.0, cv2.GaussianBlur(anom.astype(np.float32), (0, 0), 1.3) * 1.5)
+    fill = cv2.GaussianBlur(cv2.resize(fill, (w, h), interpolation=cv2.INTER_LINEAR), (0, 0), 1.5)
+    wt = cv2.resize(wt, (w, h), interpolation=cv2.INTER_LINEAR)[:, :, None]
+    return np.clip(bg8 * (1 - wt) + fill * wt + 0.5, 0, 255).astype(np.uint8)
+
+
+def _composite_patch(frame, pm4, M_tot, opacity, shadow_sigma, shadow_dy, shadow_op, corners,
+                     ring_r=0):
+    H, W = frame.shape[:2]
+    mg = int(3 * shadow_sigma + shadow_dy + 3 + ring_r * 1.8 + 3)
+    xs, ys = corners[:, 0], corners[:, 1]
+    x0 = max(int(np.floor(xs.min())) - mg, 0)
+    y0 = max(int(np.floor(ys.min())) - mg, 0)
+    x1 = min(int(np.ceil(xs.max())) + mg, W)
+    y1 = min(int(np.ceil(ys.max())) + mg, H)
+    if x1 <= x0 or y1 <= y0:
+        return frame
+    Mp = M_tot.copy()
+    Mp[0, 2] -= x0
+    Mp[1, 2] -= y0
+    pw = cv2.warpAffine(pm4, Mp, (x1 - x0, y1 - y0), flags=cv2.INTER_LINEAR,
+                        borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+    a = pw[:, :, 3]
+    sh = cv2.GaussianBlur(a, (0, 0), shadow_sigma)
+    dy = int(round(shadow_dy))
+    if dy > 0:
+        sh = np.concatenate([np.zeros((dy, sh.shape[1]), np.float32), sh[:-dy]], 0)
+    out = frame.copy()
+    if ring_r > 0:
+        out[y0:y1, x0:x1] = _cleanup_patch(out[y0:y1, x0:x1], a, ring_r)
+    bg = out[y0:y1, x0:x1].astype(np.float32)
+    bg *= (1.0 - shadow_op * opacity * np.clip(sh, 0, 1))[:, :, None]
+    bg = pw[:, :, :3] * opacity + bg * (1.0 - a * opacity)[:, :, None]
+    out[y0:y1, x0:x1] = np.clip(bg + 0.5, 0, 255).astype(np.uint8)
+    return out
+
+
+def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
+                        min_conf=0.35, debug=False, cleanup=True):
+    t_start = time.time()
+    n = len(frames)
+    H, W = frames[0].shape[:2]
+    gh, gw = glasses_rgba.shape[:2]
+    fps = 24.0
+    s = 0.5
+    c0 = np.array([paste_x + gw / 2.0, paste_y + gh / 2.0])
+    R = gw / 2.0
+
+    # ---------------- tracking (half res) ----------------
+    def to_gray(f):
+        g = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+        return cv2.resize(g, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+
+    roi, excl = _roi_polys(c0, gw, gh, face_box, (H, W))
+    g_prev = to_gray(frames[0])
+    g0 = g_prev
+    hh, ww = g0.shape
+    I = np.array([[1, 0, 0], [0, 1, 0]], np.float64)
+    mask0 = _make_mask(I, roi, excl, (hh, ww), s)
+    sharp0 = _sharp(g0, mask0)
+    anchor_pts = _detect(g0, mask0, 200)
+    p0 = anchor_pts.copy()          # frame-0 coords of live tracks (half res)
+    p_prev = anchor_pts.copy()      # their positions in previous frame
+    Ms_full = [I.copy()]            # frame0 -> frame i, full-res coords (raw)
+    Ms_half = I.copy()
+    conf = np.zeros(n)
+    conf[0] = 1.0
+    ninl = np.zeros(n, int)
+    reproj = np.zeros(n)
+    ANCHOR_EVERY = 8
+    last_good_i = 0
+    lost = 0 if len(p0) >= 8 else 1
+
+    for i in range(1, n):
+        g = to_gray(frames[i])
+        M_h = None
+        inl_mask = None
+        n_in, ratio, err = 0, 0.0, 9.0
+        if len(p_prev) >= 4:
+            pb, ok = _lk_fb(g_prev, g, p_prev, 1.0)
+            if ok.sum() >= 4:
+                M_h, inl = _fit(p0[ok], pb[ok])
+                if M_h is not None:
+                    idx = np.where(ok)[0]
+                    keep = np.zeros(len(p0), bool)
+                    keep[idx[inl]] = True
+                    n_in = int(inl.sum())
+                    ratio = n_in / max(1, int(ok.sum()))
+                    res = np.linalg.norm(_apply(M_h, p0[ok][inl]) - pb[ok][inl], axis=1)
+                    err = float(np.median(res)) if len(res) else 9.0
+                    p0 = p0[keep]
+                    p_prev = pb[keep]
+        # periodic / recovery direct re-anchor to frame 0
+        need_anchor = (i % ANCHOR_EVERY == 0) or M_h is None or n_in < 12
+        if need_anchor and len(anchor_pts) >= 8:
+            pred = _apply(Ms_half, anchor_pts.astype(np.float64)).astype(np.float32)
+            pb2, ok2 = _lk_fb(g0, g, anchor_pts, 1.5, init=pred, wide=True)
+            # reject matches far from prediction (wrong lock)
+            ok2 &= np.linalg.norm(pb2 - pred, axis=1) < 25 * s * 2
+            if ok2.sum() >= 8:
+                M2, inl2 = _fit(anchor_pts[ok2], pb2[ok2])
+                if M2 is not None and inl2.sum() >= max(10, n_in * 0.8 if M_h is not None else 10):
+                    n2 = int(inl2.sum())
+                    r2 = n2 / int(ok2.sum())
+                    if r2 >= 0.5 or M_h is None:
+                        M_h = M2
+                        idx = np.where(ok2)[0][inl2]
+                        p0 = anchor_pts[idx].copy()
+                        p_prev = pb2[idx].copy()
+                        n_in, ratio = n2, r2
+                        res = np.linalg.norm(_apply(M2, p0) - p_prev, axis=1)
+                        err = float(np.median(res))
+        # confidence
+        if M_h is None:
+            c = 0.0
+        else:
+            A = M_h[:, :2]
+            sc = np.sqrt(abs(np.linalg.det(A)))
+            sane = 0.6 < sc < 1.8 and abs(np.arctan2(A[1, 0], A[0, 0])) < np.radians(45)
+            c_n = np.clip(n_in / 20.0, 0, 1)
+            c_r = np.clip(ratio / 0.7, 0, 1)
+            c_e = np.clip(1.0 - err / 2.5, 0, 1)
+            M_full_try = M_h.copy()
+            M_full_try[:, 2] /= s
+            m_try = _make_mask(M_full_try, roi, excl, (hh, ww), s)
+            sh_r = _sharp(g, m_try) / sharp0
+            c_s = np.clip((sh_r - 0.25) / 0.35, 0, 1)
+            c = float(c_n * c_r * c_e * c_s) if sane else 0.0
+            ninl[i], reproj[i] = n_in, err
+        conf[i] = c
+        if M_h is not None and c >= 0.15:
+            Ms_half = M_h
+            last_good_i = i
+        # keep track set healthy (only when pose is trustworthy)
+        if c >= 0.5 and len(p_prev) < 70:
+            M_full_c = Ms_half.copy()
+            M_full_c[:, 2] /= s
+            mk = _make_mask(M_full_c, roi, excl, (hh, ww), s)
+            new = _detect(g, mk, 150 - len(p_prev), p_prev)
+            if len(new):
+                Mi = _inv(Ms_half)
+                p0 = np.vstack([p0, _apply(Mi, new.astype(np.float64)).astype(np.float32)])
+                p_prev = np.vstack([p_prev, new])
+        Mf = Ms_half.copy()
+        Mf[:, 2] /= s
+        Ms_full.append(Mf)
+        g_prev = g
+        if len(p_prev) < 4 and not (len(anchor_pts) >= 8):
+            pass
+
+    # ---------------- smoothing (zero-phase One-Euro on px-equivalent params) ----------------
+    P = np.array([_params_from_M(M, c0) for M in Ms_full])
+    P[:, 3] = np.unwrap(P[:, 3])
+    Ps = _smooth_params(P, R, fps)
+    Ms = [_M_from_params(p, c0) for p in Ps]
+    raw_c = P[:, :2]
+    sm_c = Ps[:, :2]
+    d2 = np.linalg.norm(sm_c[2:] - 2 * sm_c[1:-1] + sm_c[:-2], axis=1) if n > 2 else np.zeros(1)
+    max_jitter = float(d2.max()) if len(d2) else 0.0
+
+    # ---------------- opacity (fade over ~6 frames, hysteresis) ----------------
+    opac = np.zeros(n)
+    step = 1.0 / 6.0
+    on = True
+    cur = 1.0
+    for i in range(n):
+        if on and conf[i] < min_conf:
+            on = False
+        elif (not on) and conf[i] >= min_conf + 0.1:
+            on = True
+        tgt = 1.0 if on else 0.0
+        cur = min(1.0, cur + step) if tgt >= 0.5 else max(0.0, cur - step)
+        opac[i] = cur
+
+    # ---------------- composite ----------------
+    g = glasses_rgba
+    if g.shape[2] == 3:
+        g = np.dstack([g, np.full(g.shape[:2], 255, np.uint8)])
+    a = g[:, :, 3:4].astype(np.float32) / 255.0
+    pm4 = np.concatenate([g[:, :, :3].astype(np.float32) * a, a], 2)
+    corners0 = np.array([[paste_x, paste_y], [paste_x + gw, paste_y],
+                         [paste_x + gw, paste_y + gh], [paste_x, paste_y + gh]], np.float64)
+    shadow_sigma = max(1.5, 0.025 * gw)
+    shadow_dy = max(1.0, 0.012 * gw)
+    out = []
+    for i in range(n):
+        if opac[i] <= 0.004:
+            out.append(frames[i])
+            continue
+        T = np.array(Ms[i])
+        M_tot = np.hstack([T[:, :2], (T[:, :2] @ np.array([paste_x, paste_y]) + T[:, 2])[:, None]])
+        corners = _apply(T, corners0)
+        fr = _composite_patch(frames[i], pm4, M_tot, float(opac[i]), shadow_sigma,
+                              shadow_dy, 0.25, corners,
+                              ring_r=(0.12 * gw * float(np.sqrt(abs(np.linalg.det(T[:, :2]))))) if cleanup else 0)
+        if debug:
+            cv2.polylines(fr, [corners.astype(np.int32)], True, (0, 255, 0), 1)
+            cv2.putText(fr, "c=%.2f o=%.2f" % (conf[i], opac[i]), (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        out.append(fr)
+
+    el = time.time() - t_start
+    stats = {
+        "mean_conf": float(conf.mean()),
+        "frames_overlaid": int((opac > 0.5).sum()),
+        "frames_faded": int((opac < 0.999).sum()),
+        "max_jitter_px": max_jitter,
+        "ms_per_frame": 1000.0 * el / n,
+        "conf": conf, "opacity": opac, "inliers": ninl, "reproj_err": reproj,
+        "transforms": Ms, "transforms_raw": Ms_full,
+    }
+    return out, stats
 """
 
 STAGE_3A_CODE = r"""
@@ -397,6 +803,7 @@ def harmonize_eyewear(portrait_pil, glasses_rgba, paste_x, paste_y):
     return Image.fromarray(res, "RGBA")
 
 FACE_BOXES = {}
+GLASSES_META = {}
 
 def composite_eyewear_on_model(portrait_pil, prod_rgba, is_closeup=False, shot_key="1"):
     w, h = portrait_pil.size
@@ -433,6 +840,9 @@ def composite_eyewear_on_model(portrait_pil, prod_rgba, is_closeup=False, shot_k
     paste_x = face_cx - gw // 2
     paste_y = eye_y - int(gh * 0.48)
     glasses_resized = harmonize_eyewear(portrait_pil, glasses_resized, paste_x, paste_y)
+    # 保存真實眼鏡圖與位置：3C 會在 AI 影片每一格依頭部運動重新貼回真品 (避免 AI 把眼鏡畫變形)
+    glasses_resized.save(f"/content/temp/glasses_shot{shot_key}.png")
+    GLASSES_META[shot_key] = {"x": int(paste_x), "y": int(paste_y), "src_w": int(w), "src_h": int(h)}
     g_np = np.array(glasses_resized)
     g_alpha = g_np[:, :, 3].astype(np.float32) / 255.0
     shadow_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -470,6 +880,8 @@ for sh in SHOTS:
     print(f"  ✓ 第 {sid}/{len(SHOTS)} 鏡首幀完成 ({'配戴真實眼鏡' if sh['wear'] else '未配戴'})")
 with open("/content/temp/face_boxes.json", "w", encoding="utf-8") as f:
     json.dump(FACE_BOXES, f)
+with open("/content/temp/glasses_meta.json", "w", encoding="utf-8") as f:
+    json.dump(GLASSES_META, f)
 print("[3A] 真人模特兒配戴首幀合成完成！子程序即將退出並釋放 100% 記憶體...")
 """
 
@@ -501,7 +913,7 @@ def check_embeds(*ts):
         if not torch.isfinite(t).all():
             raise RuntimeError("[3B] 文字特徵含 NaN/Inf (FP16 溢位)，請改選方案 1C (SVD-XT) 或方案 2。")
 
-neg_video = "static image, frozen frame, no motion, still photo, deformed sunglasses, melting frame, morphing lenses, extra glasses, warped logo, distorted face, on-screen text, subtitles, watermark, blurry, flickering, jerky camera"
+neg_video = "frozen frame, still photo, fast motion, sudden movement, walking, running, morphing, melting face, distorted face, deformed sunglasses, melting frame, morphing lenses, extra glasses, warped logo, motion blur, ghosting, double exposure, on-screen text, subtitles, watermark, blurry, flickering, jerky camera"
 
 if "Wan2.2" in gen_mode:
     print("[3B] 正在單獨載入 Wan2.2 文字編碼器至 T4 GPU (避免與影片網路同時佔用系統 RAM)...")
@@ -771,6 +1183,53 @@ def ltx_generate(pipe, vae32, kf_in, W, H, F, steps, pe, pam, npe, npam, seed, d
         video = vae32.decode(lat, ts, return_dict=False)[0]
     return pipe.video_processor.postprocess_video(video, output_type="pil")[0]
 
+WEAR = {sh["id"]: sh["wear"] for sh in SHOTS}
+try:
+    with open("/content/temp/glasses_meta.json", "r", encoding="utf-8") as _f:
+        GLASSES_META = json.load(_f)
+except Exception:
+    GLASSES_META = {}
+
+def apply_real_glasses(sid, out_p):
+    # AI 會把眼鏡畫變形 → 追蹤頭部運動，把 3A 的真實眼鏡逐格貼回 (產品 100% 真品)
+    gp = f"/content/temp/glasses_shot{sid}.png"
+    meta = GLASSES_META.get(str(sid))
+    if not WEAR.get(sid) or meta is None or not os.path.exists(gp):
+        return None
+    import espner_track as TRK
+    sx, sy = OUT_W / float(meta["src_w"]), OUT_H / float(meta["src_h"])
+    g = cv2.imread(gp, cv2.IMREAD_UNCHANGED)
+    g = cv2.resize(g, (max(1, int(round(g.shape[1] * sx))), max(1, int(round(g.shape[0] * sy)))), interpolation=cv2.INTER_AREA)
+    cap = cv2.VideoCapture(out_p)
+    frames = []
+    while True:
+        ok, fr = cap.read()
+        if not ok:
+            break
+        frames.append(fr)
+    cap.release()
+    if not frames:
+        return None
+    out, st = TRK.recomposite_glasses(frames, g, int(round(meta["x"] * sx)), int(round(meta["y"] * sy)),
+                                      face_box=load_face_box(sid, OUT_W, OUT_H), cleanup=True)
+    cv2.setNumThreads(0)
+    tmp = out_p.replace(".mp4", "_glasses.mp4")
+    vw = cv2.VideoWriter(tmp, cv2.VideoWriter_fourcc(*"mp4v"), 24.0, (OUT_W, OUT_H))
+    for fr in out:
+        vw.write(fr)
+    vw.release()
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", tmp, "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", out_p], check=True)
+    print(f"     👓 真實眼鏡逐格貼回：追蹤信心 {st.get('mean_conf', 0):.2f}｜貼回 {st.get('frames_overlaid', 0)} 格｜淡出 {st.get('frames_faded', 0)} 格")
+    return st
+
+def post_shot(sid, out_p, entry):
+    try:
+        st = apply_real_glasses(sid, out_p)
+        if st:
+            entry["glasses_conf"] = round(float(st.get("mean_conf", 0)), 2)
+    except Exception as e:
+        print(f"     ⚠️ 真實眼鏡貼回略過 ({e})")
+
 def ltx_preprocess(img, crf):
     # LTX 以壓縮影片訓練；乾淨照片當首幀容易產生「凍結」影片 → 先經過一次 H.264 壓縮
     src, enc = "/content/temp/_ltx_in.png", "/content/temp/_ltx_in.mp4"
@@ -791,9 +1250,13 @@ def finalize_ai_clip(frames, out_p, add_camera_move=False, shot_idx=1, dur=8.0, 
         vw.write(cv2.cvtColor(_to_u8(f), cv2.COLOR_RGB2BGR))
     vw.release()
     pts = dur / (len(frames) / float(src_fps))
+    if src_fps == 24 and pts <= 1.02:
+        vf = f"scale={OUT_W}:{OUT_H}:flags=lanczos,tpad=stop_mode=clone:stop_duration=1"   # 原生長度：不補幀
+    else:
+        vf = f"setpts={pts:.4f}*PTS,minterpolate=fps=24:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1,scale={OUT_W}:{OUT_H}:flags=lanczos,tpad=stop_mode=clone:stop_duration=1"
     subprocess.run([
         "ffmpeg", "-y", "-loglevel", "error", "-i", tmp_raw,
-        "-vf", f"setpts={pts:.4f}*PTS,minterpolate=fps=24:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1,scale={OUT_W}:{OUT_H}:flags=lanczos,tpad=stop_mode=clone:stop_duration=1",
+        "-vf", vf,
         "-frames:v", str(int(round(dur * 24))), "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", tmp_interp
     ], check=True)
     if not add_camera_move:
@@ -864,7 +1327,9 @@ try:
             fidelity_check(frames, kf_in, f"Wan2.2 第 {idx} 鏡")
             ms = motion_score(frames)
             finalize_ai_clip(frames, out_p, add_camera_move=ms < MOTION_MIN, shot_idx=idx, dur=DURS[idx])
-            STATUS["shots"].append({"shot": idx, "motion": round(ms, 2)})
+            entry = {"shot": idx, "motion": round(ms, 2)}
+            post_shot(idx, out_p, entry)
+            STATUS["shots"].append(entry)
             print(f"     ✓ 第 {idx} 段完成 (motion={ms:.2f}，耗時 {time.time() - t0:.1f}s)")
             del frames
             gc.collect()
@@ -875,7 +1340,12 @@ try:
         embeds = torch.load("/content/temp/prompt_embeds.pt", map_location="cpu", weights_only=False)
         # 0.9.5 的圖生影片動態遠優於 0.9.0；兩者共用同一個 T5，若 0.9.5 失敗自動退回 0.9.0
         LTX_REPOS = ["Lightricks/LTX-Video-0.9.5", "Lightricks/LTX-Video"]
-        LTX_W, LTX_H, LTX_F, LTX_STEPS = (832, 480, 97, 30) if LANDSCAPE else (480, 832, 97, 30)
+        LTX_W, LTX_H, LTX_STEPS = (832, 480, 30) if LANDSCAPE else (480, 832, 30)
+
+        def ltx_frames_for(dur):
+            # 直接生成整段長度 (8k+1 格)，不靠補幀拉長 → 避免殘影；上限 145 格 (6 秒) 以控制 T4 時間
+            n = int(round(dur * 24))
+            return min(145, ((n - 1 + 7) // 8) * 8 + 1)
         shots = [(sid, KFS[sid], embeds[sid]["pe"], embeds[sid]["pam"], embeds[sid]["npe"], embeds[sid]["npam"], shot_mp4(sid)) for sid in KFS]
 
         def run_ltx(repo):
@@ -893,6 +1363,7 @@ try:
                 # 第 1 次 CRF 30；若畫面幾乎靜止，換種子並加重壓縮 (CRF 40) 重試一次
                 for attempt, crf in enumerate([30, 40]):
                     t0 = time.time()
+                    LTX_F = ltx_frames_for(DURS[idx])
                     print(f"  -> 第 {idx}/{len(shots)} 段 LTX 動態鏡頭 ({LTX_W}x{LTX_H}, {LTX_F}f, {LTX_STEPS} steps, 首幀 CRF {crf})...")
                     kf_in = ltx_preprocess(kf.resize((LTX_W, LTX_H), Image.Resampling.LANCZOS), crf)
                     frames = ltx_generate(pipe, vae32, kf_in, LTX_W, LTX_H, LTX_F, LTX_STEPS,
@@ -907,7 +1378,9 @@ try:
                         break
                     print("     ⚠️ 畫面幾乎靜止，換種子並加重首幀壓縮重試...")
                 finalize_ai_clip(best[1], out_p, add_camera_move=best[0] < MOTION_MIN, shot_idx=idx, dur=DURS[idx])
-                STATUS["shots"].append({"shot": idx, "motion": round(best[0], 2), "first_frame_sim": round(fid[0], 2), "continuity": round(fid[1], 2)})
+                entry = {"shot": idx, "motion": round(best[0], 2), "first_frame_sim": round(fid[0], 2), "continuity": round(fid[1], 2)}
+                post_shot(idx, out_p, entry)
+                STATUS["shots"].append(entry)
                 print(f"     ✓ 第 {idx} 段完成 (motion={best[0]:.2f})")
                 del frames, best
                 gc.collect()
@@ -946,7 +1419,9 @@ try:
             fidelity_check(frames, kf_in, f"SVD-XT 第 {idx} 鏡")
             ms = motion_score(frames)
             finalize_ai_clip(frames, out_p, add_camera_move=ms < MOTION_MIN, shot_idx=idx, dur=DURS[idx], src_fps=8)
-            STATUS["shots"].append({"shot": idx, "motion": round(ms, 2)})
+            entry = {"shot": idx, "motion": round(ms, 2)}
+            post_shot(idx, out_p, entry)
+            STATUS["shots"].append(entry)
             print(f"     ✓ 第 {idx} 段完成 (motion={ms:.2f})")
         STATUS["engine"] = "stabilityai/stable-video-diffusion-img2vid-xt"
     STATUS["ai_ok"] = True
@@ -2253,6 +2728,485 @@ def mux_audio(video_in, audio_in, video_out, target_lufs=-16.0, fade_in=0.5, fad
     return video_out
 """
 
+QC_CODE = r"""
+# -*- coding: utf-8 -*-
+# ESPNER video quality check (espner_qc.py)
+#
+# Scores a finished ad video shot by shot and turns the numbers into a plain
+# Traditional Chinese report for a non-technical user.
+#
+# Public API:
+#   analyze_shot(frames_bgr)              -> dict of metrics for one shot
+#   analyze_video(mp4_path, shot_bounds)  -> dict with per-shot results, grade, issues
+#   format_report(result)                 -> zh-TW multi-line report string
+#
+# Dependencies: numpy, opencv-python-headless, ffprobe CLI (no torch, no scipy).
+#
+# Metric definitions
+#   sharpness           median variance of Laplacian over frames (gray, 360 px wide)
+#   sharpness_min_ratio worst contrast-normalised frame / median ("mushy" frames);
+#                       frames without contrast (fades to white) are skipped
+#   ghosting            share of frames flagged by the motion-compensated ghost test.
+#                       Each frame is predicted from its t-1 and t+1 neighbours after DIS
+#                       optical flow (180 px wide) has removed real motion. A frame is
+#                       flagged when the leftover error is large on average (> GHOST_MEAN)
+#                       and a visible share of pixels (> GHOST_PIX_FRAC) is off by more
+#                       than GHOST_PIX_DIFF. Double exposure and AI morph flicker survive
+#                       the motion model; ordinary camera motion does not.
+#   flicker             std of per-frame mean luma after removing a moving average (fades
+#                       and slow ramps are not flicker)
+#   motion              mean absolute difference between consecutive gray frames (0..255)
+#   face_rate           share of every 8th frame where the Haar frontal face cascade fires
+#   skin_frac           share of skin-tone pixels; used to tell people from product shots
+#
+# Calibration (reference ads refA/refB, v.mp4, and a synthetic double-exposure clip):
+#   ghosting per shot: refs 0.00-0.06, synthetic 0.56   -> GHOST_SHOT_FRAC 0.15
+#   motion per shot:   v.mp4 0.10-0.31, refs >= 0.84    -> STATIC_MOTION 0.575
+#   motion, fast refA whip shot 10.4, same at 2x speed 15.9 -> VIOLENT_MOTION 14
+#   sharpness: refs 106-613, synthetic 21              -> BLUR_LIMIT 40
+#   Haar frontal face misses back and profile shots, so the face check is a minor
+#   (penalty 5) hint, gated by skin presence.
+
+import json
+import os
+import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+import cv2
+import numpy as np
+
+ANALYSIS_WIDTH = 360          # sharpness, luma and face use this width
+FLOW_WIDTH = 180              # optical flow / ghost residual use this width
+FACE_EVERY = 8                # Haar face test on every 8th frame
+CUT_PIXDIFF = 25.0            # mean abs diff of 96x54 gray frames: hard cut
+CUT_PIXDIFF_SOFT = 12.0       # soft cut: needs a histogram change as well
+CUT_HIST = 0.25               # Bhattacharyya distance of HS histograms
+MIN_SHOT_FRAMES = 8           # shorter segments are merged into the previous shot
+
+GHOST_MEAN = 2.2              # average residual (0..255) the motion model cannot explain
+GHOST_PIX_FRAC = 0.01         # share of pixels with a large residual
+GHOST_PIX_DIFF = 20.0         # what counts as a large residual (0..255)
+GHOST_SHOT_FRAC = 0.15        # shot is ghosted when this share of its frames is flagged
+
+BLUR_LIMIT = 40.0             # median Laplacian variance at 360 px below this = blurred
+MUSHY_RATIO = 0.25            # worst contrast-normalised frame below this x median = mushy
+FLICKER_TREND = 15            # moving-average window (frames) removed before the flicker std
+FLICKER_LUMA = 4.0            # std of detrended per-frame mean luma (fades are not flicker)
+STATIC_MOTION = 0.575         # consecutive-frame mean diff below this = almost no motion
+VIOLENT_MOTION = 14.0         # consecutive-frame mean diff above this = too violent
+FACE_MIN_RATE = 0.05          # below this share of sampled frames with a frontal face...
+SKIN_MIN = 0.08               # ...AND this share of skin-tone pixels = person without a face
+ENDCARD_BRIGHT = 0.60         # share of near-white pixels that marks an endcard
+
+PENALTY = {
+    "ghost": 40, "blur": 25, "mushy": 15, "flicker": 15,
+    "static": 25, "violent": 20, "face": 5,
+}
+
+PHRASE = {
+    "ghost": "有殘影（畫面疑似重影或變形）",
+    "blur": "畫面模糊",
+    "mushy": "部分畫面突然變糊",
+    "flicker": "畫面亮度閃爍",
+    "static": "幾乎沒有動",
+    "violent": "動作太劇烈",
+    "face": "人物臉部偵測不到（可能變形）",
+}
+
+SUGGEST = {
+    "ghost": "重新生成有殘影的段落，並降低人物動作幅度或鏡頭移動速度。",
+    "blur": "提高輸出解析度，或重新生成模糊的段落。",
+    "mushy": "檢查變糊段落的前後銜接，必要時剪掉變糊的幾秒。",
+    "flicker": "統一各段亮度與色調，避免忽明忽暗。",
+    "static": "加入推近、平移或人物轉頭等動作，讓畫面不要靜止太久。",
+    "violent": "放慢動作速度，讓人物與鏡頭的移動更平順。",
+    "face": "確認人物臉部清楚可見，必要時重新生成該段。",
+}
+
+_FACE_CASCADE = None
+_TLS = threading.local()    # one DIS flow object per worker thread
+
+
+def _face_cascade():
+    # Haar frontal face cascade, loaded once (bundled with opencv-python-headless).
+    global _FACE_CASCADE
+    if _FACE_CASCADE is None:
+        _FACE_CASCADE = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    return _FACE_CASCADE
+
+
+def _dis():
+    # DIS optical flow (medium preset), one instance per thread.
+    if getattr(_TLS, "dis", None) is None:
+        _TLS.dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+    return _TLS.dis
+
+
+def _resize_w(img, width=ANALYSIS_WIDTH):
+    # Resize keeping aspect ratio to the given width.
+    h, w = img.shape[:2]
+    if w == width:
+        return img
+    height = max(1, int(round(h * width / float(w))))
+    return cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
+
+
+def _ghost_flags(g360):
+    # Motion-compensated ghost test. g360: list of uint8 gray frames (360 px wide).
+    # Returns (flags bool array, mean residual array, pixel-fraction array).
+    n = len(g360)
+    flags = np.zeros(n, dtype=bool)
+    mean_res = np.zeros(n)
+    pix_frac = np.zeros(n)
+    if n < 3:
+        return flags, mean_res, pix_frac
+    small = [cv2.resize(g, (FLOW_WIDTH, max(1, int(round(g.shape[0] / 2.0)))),
+                        interpolation=cv2.INTER_AREA) for g in g360]
+    H, W = small[0].shape
+    gx, gy = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32))
+
+    def one(t):
+        # Motion-compensated residual for frame t (independent of the others).
+        cur = small[t]
+        dis = _dis()
+        u = dis.calc(cur, small[t - 1], None)   # cur(x) ~ prev(x + u)
+        v = dis.calc(cur, small[t + 1], None)   # cur(x) ~ next(x + v)
+        pm = cv2.remap(small[t - 1].astype(np.float32), gx + u[..., 0], gy + u[..., 1],
+                       cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        pn = cv2.remap(small[t + 1].astype(np.float32), gx + v[..., 0], gy + v[..., 1],
+                       cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        d = np.abs(cur.astype(np.float32) - 0.5 * (pm + pn))
+        return t, float(d.mean()), float(np.mean(d > GHOST_PIX_DIFF))
+
+    workers = max(1, min(4, os.cpu_count() or 1))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for t, mr, pf in ex.map(one, range(1, n - 1)):
+            mean_res[t] = mr
+            pix_frac[t] = pf
+            flags[t] = (mr > GHOST_MEAN) and (pf > GHOST_PIX_FRAC)
+    return flags, mean_res, pix_frac
+
+
+def _face_rate(g360):
+    # Share of every FACE_EVERY-th frame where the Haar frontal cascade finds a face.
+    casc = _face_cascade()
+    if casc.empty():
+        return 0.0
+    idx = list(range(0, len(g360), FACE_EVERY))
+    if not idx:
+        return 0.0
+    hits = 0
+    for i in idx:
+        faces = casc.detectMultiScale(cv2.equalizeHist(g360[i]), scaleFactor=1.1,
+                                      minNeighbors=5, minSize=(24, 24))
+        if len(faces) > 0:
+            hits += 1
+    return hits / float(len(idx))
+
+
+def _skin_frac(bgr):
+    # Share of pixels in a skin-tone band (HSV). Separates people from product shots.
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    m = (hsv[..., 0] <= 22) & (hsv[..., 1] >= 35) & (hsv[..., 1] <= 170) & (hsv[..., 2] >= 90)
+    return float(np.mean(m))
+
+
+def _metrics(bgr360):
+    # All shot metrics from a list of 360 px wide BGR frames.
+    n = len(bgr360)
+    if n == 0:
+        return {"frames": 0}
+    g360 = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in bgr360]
+    lap = np.array([float(cv2.Laplacian(g, cv2.CV_64F).var()) for g in g360])
+    var = np.array([float(g.std()) ** 2 for g in g360])
+    med = max(float(np.median(lap)), 1e-6)
+    # Mushy: worst frame relative to the median, judged only on frames that have contrast,
+    # normalised by contrast so that fades to white do not look like blur.
+    content = var >= 0.25 * max(float(np.median(var)), 1e-6)
+    if int(content.sum()) >= 3:
+        norm = lap[content] / np.maximum(var[content], 1.0)
+        min_ratio = float(np.min(norm) / max(float(np.median(norm)), 1e-9))
+    else:
+        min_ratio = 1.0
+    flags, mean_res, _pix = _ghost_flags(g360)
+    means = np.array([float(g.mean()) for g in g360])
+    if n > FLICKER_TREND:
+        k = np.ones(FLICKER_TREND) / FLICKER_TREND
+        trend = np.convolve(np.pad(means, FLICKER_TREND // 2, mode="edge"), k, mode="valid")[:n]
+        flicker = float(np.std(means - trend))
+    else:
+        flicker = float(np.std(means))
+    if n >= 2:
+        motion = float(np.mean([np.mean(np.abs(g360[i].astype(np.int16) - g360[i - 1].astype(np.int16)))
+                                for i in range(1, n)]))
+    else:
+        motion = 0.0
+    sample = bgr360[::FACE_EVERY]
+    skin = float(np.mean([_skin_frac(f) for f in sample]))
+    inner = slice(1, max(1, n - 1))
+    return {
+        "frames": n,
+        "sharpness": med,
+        "sharpness_min_ratio": min_ratio,
+        "ghosting": float(np.mean(flags)),
+        "ghost_mean_res_p50": float(np.median(mean_res[inner])) if n >= 3 else 0.0,
+        "flicker": flicker,
+        "motion": motion,
+        "face_rate": _face_rate(g360),
+        "skin_frac": skin,
+        "mean_luma": float(np.mean(means)),
+        "bright_frac": float(np.mean([np.mean(g > 235) for g in g360])),
+    }
+
+
+def analyze_shot(frames_bgr):
+    # Metrics for one shot. frames_bgr: list of HxWx3 uint8 BGR frames in order.
+    # Returns the metric dict described in the module header.
+    return _metrics([_resize_w(f) for f in frames_bgr])
+
+
+def _probe_audio(mp4_path):
+    # True when ffprobe finds at least one audio stream.
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=codec_type", "-of", "json", mp4_path],
+            capture_output=True, text=True, timeout=60)
+        data = json.loads(out.stdout or "{}")
+        return len(data.get("streams", [])) > 0
+    except Exception:
+        return False
+
+
+def _hs_hist(small_bgr):
+    # Hue/saturation histogram used as a secondary cut signal.
+    hsv = cv2.cvtColor(small_bgr, cv2.COLOR_BGR2HSV)
+    h = cv2.calcHist([hsv], [0, 1], None, [24, 8], [0, 180, 0, 256])
+    cv2.normalize(h, h, 0, 1, cv2.NORM_MINMAX)
+    return h
+
+
+def _detect_shots(pix, hists):
+    # A cut is a hard jump in pixels (96x54 gray), or a softer jump that also
+    # changes the colour histogram. Short segments are merged into the previous one.
+    n = len(pix)
+    if n == 0:
+        return []
+    cuts = [0]
+    for i in range(1, n):
+        d_pix = float(np.mean(np.abs(pix[i] - pix[i - 1])))
+        d_hist = cv2.compareHist(hists[i - 1], hists[i], cv2.HISTCMP_BHATTACHARYYA)
+        if d_pix >= CUT_PIXDIFF or (d_pix >= CUT_PIXDIFF_SOFT and d_hist >= CUT_HIST):
+            cuts.append(i)
+    bounds = []
+    for j, s in enumerate(cuts):
+        e = cuts[j + 1] if j + 1 < len(cuts) else n
+        bounds.append([s, e])
+    merged = []
+    for s, e in bounds:
+        if merged and (e - s) < MIN_SHOT_FRAMES:
+            merged[-1][1] = e
+        else:
+            merged.append([s, e])
+    if len(merged) > 1 and (merged[0][1] - merged[0][0]) < MIN_SHOT_FRAMES:
+        merged[1][0] = merged[0][0]
+        merged.pop(0)
+    return [(s, e) for s, e in merged]
+
+
+def _judge(m):
+    # Turn one shot's metrics into a list of problem keys (see PENALTY).
+    problems = []
+    if m.get("frames", 0) == 0:
+        return problems
+    endcard = m["bright_frac"] >= ENDCARD_BRIGHT
+    if m["ghosting"] >= GHOST_SHOT_FRAC:
+        problems.append("ghost")
+    if m["sharpness"] < BLUR_LIMIT:
+        problems.append("blur")
+    if m["sharpness_min_ratio"] < MUSHY_RATIO and "blur" not in problems:
+        problems.append("mushy")
+    if m["flicker"] > FLICKER_LUMA:
+        problems.append("flicker")
+    if not endcard and m["motion"] < STATIC_MOTION:
+        problems.append("static")
+    if m["motion"] > VIOLENT_MOTION:
+        problems.append("violent")
+        # Very fast motion breaks the flow model and looks like ghosting; attribute it to motion.
+        if "ghost" in problems:
+            problems.remove("ghost")
+    if not endcard and m["skin_frac"] >= SKIN_MIN and m["face_rate"] < FACE_MIN_RATE and m["frames"] >= 8:
+        problems.append("face")
+    return problems
+
+
+def _shot_score(problems):
+    return max(0, 100 - sum(PENALTY[p] for p in problems))
+
+
+def _letter(score):
+    if score >= 85:
+        return "A"
+    if score >= 72:
+        return "B"
+    if score >= 58:
+        return "C"
+    return "D"
+
+
+def analyze_video(mp4_path, shot_bounds=None):
+    # Analyze an mp4 shot by shot.
+    # shot_bounds: list of (start_frame, end_frame) with end exclusive, or None to
+    #              detect cuts automatically.
+    cap = cv2.VideoCapture(mp4_path)
+    if not cap.isOpened():
+        raise IOError("cannot open video: %s" % mp4_path)
+    fps = float(cap.get(cv2.CAP_PROP_FPS)) or 24.0
+    small_frames = []
+    pix = []
+    hists = []
+    width = height = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        if width == 0:
+            height, width = frame.shape[:2]
+        small = _resize_w(frame)
+        small_frames.append(small)
+        if shot_bounds is None:
+            g96 = cv2.resize(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), (96, 54),
+                             interpolation=cv2.INTER_AREA).astype(np.float32)
+            pix.append(g96)
+            hists.append(_hs_hist(small))
+    cap.release()
+    n = len(small_frames)
+    duration = n / fps if fps > 0 else 0.0
+
+    if shot_bounds is None:
+        bounds = _detect_shots(pix, hists)
+    else:
+        bounds = []
+        for s, e in shot_bounds:
+            s, e = max(0, int(s)), min(n, int(e))
+            if e > s:
+                bounds.append((s, e))
+
+    shots = []
+    for idx, (s, e) in enumerate(bounds):
+        m = _metrics(small_frames[s:e])
+        problems = _judge(m)
+        score = _shot_score(problems)
+        shot = dict(m)
+        shot.update({
+            "index": idx + 1,
+            "start_frame": s,
+            "end_frame": e,
+            "start_s": round(s / fps, 2),
+            "end_s": round(e / fps, 2),
+            "problems": problems,
+            "score": score,
+            "grade": _letter(score),
+        })
+        shots.append(shot)
+    small_frames = None
+
+    has_audio = _probe_audio(mp4_path)
+    issues = []
+    for sh in shots:
+        if sh["problems"]:
+            names = [PHRASE[p] for p in sorted(sh["problems"], key=lambda k: -PENALTY[k])]
+            issues.append("第%d段（%.1f–%.1f 秒）：%s。" % (
+                sh["index"], sh["start_s"], sh["end_s"], "、".join(names)))
+    if not has_audio:
+        issues.append("影片沒有聲音軌道，若需要配樂請重新輸出。")
+
+    total = sum(sh["end_frame"] - sh["start_frame"] for sh in shots)
+    if total > 0:
+        overall_score = sum(sh["score"] * (sh["end_frame"] - sh["start_frame"])
+                            for sh in shots) / float(total)
+        ghost_share = sum(sh["end_frame"] - sh["start_frame"] for sh in shots
+                          if "ghost" in sh["problems"]) / float(total)
+    else:
+        overall_score, ghost_share = 0.0, 0.0
+    overall = _letter(overall_score)
+    if ghost_share >= 0.25 and overall in ("A", "B"):
+        overall = "C"
+
+    return {
+        "path": mp4_path,
+        "duration": round(duration, 2),
+        "fps": round(fps, 2),
+        "size": [width, height],
+        "has_audio": has_audio,
+        "shots": shots,
+        "overall_score": round(overall_score, 1),
+        "overall_grade": overall,
+        "issues": issues,
+    }
+
+
+_GRADE_TEXT = {
+    "A": "優良，可直接使用",
+    "B": "良好，有小問題可視情況修改",
+    "C": "尚可，建議修改後再發布",
+    "D": "不建議使用，請重新生成",
+}
+
+
+def _suggestions(result):
+    # Top 2 suggestions, weighted by how much footage each problem touches.
+    weight = {}
+    for sh in result.get("shots", []):
+        for p in sh.get("problems", []):
+            weight[p] = weight.get(p, 0) + PENALTY[p] * (sh["end_frame"] - sh["start_frame"])
+    ranked = sorted(weight.items(), key=lambda kv: -kv[1])
+    out = [SUGGEST[p] for p, _ in ranked[:2]]
+    if not out:
+        out = ["畫面與動作表現良好，可以直接使用。"]
+    return out
+
+
+def format_report(result):
+    # Plain zh-TW report for a non-technical user.
+    lines = []
+    w, h = result.get("size", [0, 0])
+    lines.append("【影片品質檢查報告】")
+    lines.append("影片長度：%.1f 秒｜解析度：%dx%d｜聲音：%s" % (
+        result.get("duration", 0.0), w, h, "有" if result.get("has_audio") else "無"))
+    lines.append("")
+    lines.append("逐段檢查：")
+    if not result.get("shots"):
+        lines.append("（找不到可分析的畫面段落）")
+    for sh in result.get("shots", []):
+        time_txt = "%.1f–%.1f 秒" % (sh["start_s"], sh["end_s"])
+        if not sh["problems"]:
+            lines.append("✅ 第%d段（%s）：畫面清晰，動作自然" % (sh["index"], time_txt))
+            continue
+        probs = set(sh["problems"])
+        labels = []
+        if "blur" in probs and "ghost" in probs:
+            labels.append("畫面模糊／有殘影")
+            probs -= {"blur", "ghost"}
+        labels += [PHRASE[p] for p in sorted(probs, key=lambda k: -PENALTY[k])]
+        lines.append("⚠️ 第%d段（%s）：%s" % (sh["index"], time_txt, "、".join(labels)))
+    lines.append("")
+    grade = result.get("overall_grade", "D")
+    lines.append("整體評等：%s（%s）" % (grade, _GRADE_TEXT.get(grade, "")))
+    lines.append("")
+    lines.append("建議：")
+    for i, s in enumerate(_suggestions(result), 1):
+        lines.append("%d. %s" % (i, s))
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    import sys
+    print(format_report(analyze_video(sys.argv[1])))
+"""
+
 STEP2_CODE = r"""
 #@title 📸 步驟 2：設定產品名稱、廣告風格並上傳產品正面圖片
 import os, json
@@ -2568,7 +3522,11 @@ def iter_reference_timeline():
     plan = STYLE_PLANS[style_key]
     shots = resolve_shots(cfg, cfg.get("custom_scene_prompt_en", ""))
     W, H = output_size(cfg)
-    copies = cfg.get("copy", [])
+    copies = [c for c in (cfg.get("copy") or [])]
+    if not any(copies):
+        copies = list(plan.get("copy_default", []))
+        if copies:
+            print("ℹ️ 步驟 2 的文案是空的，改用預設文案")
     lut = G.build_lut(plan["grade"])
     mark = T.render_brand_mark_layer(W, H, position=plan["brand_mark"])
     prev_last = None
@@ -2581,6 +3539,7 @@ def iter_reference_timeline():
         ci = sh.get("copy")
         if ci is not None and ci < len(copies) and copies[ci]:
             lines = [x for x in copies[ci].split("/") if x.strip()]
+            print(f"  ✍️ 第 {sh['id']} 鏡文案：{' '.join(lines)}")
             layer = T.render_copy_layer(W, H, lines, brand_mark=False, align="left")
             if T.text_color_for(G.grade_frame(frames[len(frames) // 2], plan["grade"], lut=lut, strength=0.5), layer) == "light":
                 layer = T.render_copy_layer(W, H, lines, brand_mark=False, align="left", color="light")
@@ -2728,6 +3687,25 @@ else:
         print(f"⚠️ 配樂合成失敗 ({e})，輸出無聲版本")
         shutil.copy2(video_noaudio, final_mp4)
 
+# 🔍 自動品質檢查報告 (只檢查故事鏡頭；片尾沒有人臉不檢查)
+qc_txt = f"/content/output/ESPNER_{safe_name}_品質報告.txt"
+try:
+    import espner_qc as QC
+    bounds = None
+    if IS_REF:
+        bounds, acc = [], 0
+        for _sh in resolve_shots(cfg, cfg.get("custom_scene_prompt_en", "")):
+            n_sh = int(round(_sh["dur"] * 24))
+            bounds.append((acc, acc + n_sh))
+            acc += n_sh
+    qc_report = QC.format_report(QC.analyze_video(final_mp4, shot_bounds=bounds))
+    print("\n" + qc_report)
+    with open(qc_txt, "w", encoding="utf-8") as _f:
+        _f.write(qc_report)
+except Exception as e:
+    qc_txt = None
+    print(f"ℹ️ 品質檢查略過 ({e})")
+
 sheet_jpg = f"/content/output/ESPNER_{safe_name}_QA_sheet.jpg"
 tw, th = (426, 240) if w > h else (240, 426)
 tiles = []
@@ -2744,6 +3722,8 @@ if os.path.isdir("/content/drive/MyDrive"):
     os.makedirs(drive_out_dir, exist_ok=True)
     shutil.copy2(final_mp4, os.path.join(drive_out_dir, os.path.basename(final_mp4)))
     shutil.copy2(sheet_jpg, os.path.join(drive_out_dir, os.path.basename(sheet_jpg)))
+    if qc_txt and os.path.exists(qc_txt):
+        shutil.copy2(qc_txt, os.path.join(drive_out_dir, os.path.basename(qc_txt)))
     print(f"☁️ 已自動同步備份至 Google 雲端硬碟：{drive_out_dir}")
 
 dur_sec = n_written / 24.0
@@ -2762,11 +3742,11 @@ def step4_lines():
     out = []
     for ln in cell_lines(STEP4_CODE):
         if ln.strip() == "# __EMBED_MODULES__":
-            for var, fname, code in [("titles_code", "espner_titles.py", TITLES_CODE), ("grade_code", "espner_grade.py", GRADE_CODE), ("audio_code", "espner_audio.py", AUDIO_CODE)]:
+            for var, fname, code in [("titles_code", "espner_titles.py", TITLES_CODE), ("grade_code", "espner_grade.py", GRADE_CODE), ("audio_code", "espner_audio.py", AUDIO_CODE), ("qc_code", "espner_qc.py", QC_CODE)]:
                 out += embed_stage(var, code)
                 out.append(f'open("/content/temp/{fname}", "w", encoding="utf-8").write({var})\n')
             out.append("import importlib, sys as _sys\n")
-            out.append("for _m in (\"espner_titles\", \"espner_grade\", \"espner_audio\", \"shot_plan\"):\n")
+            out.append("for _m in (\"espner_titles\", \"espner_grade\", \"espner_audio\", \"espner_qc\", \"shot_plan\"):\n")
             out.append("    _sys.modules.pop(_m, None)\n")
         else:
             out.append(ln)
@@ -2890,7 +3870,7 @@ cells = [
             "# ==============================================================================\n",
             "# 子程序腳本 3A：純 OpenCV 零記憶體去背 + 中英導演提示詞自動翻譯 + RealVisXL 真人模特兒生成 + 100% 原始眼鏡配戴合成\n",
             "# ==============================================================================\n",
-        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
+        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("track_code", TRACK_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
             "\n",
             "# ==============================================================================\n",
             "# 子程序腳本 3B：獨立文字編碼器 (T4 原生 FP16 加速，算完即釋放 9.5GB T5 記憶體！)\n",
@@ -2903,8 +3883,9 @@ cells = [
         ] + embed_stage("stage_3c_code", STAGE_3C_CODE) + [
             "\n",
             "Path(\"/content/temp/shot_plan.py\").write_text(shot_plan_code, encoding=\"utf-8\")\n",
+            "Path(\"/content/temp/espner_track.py\").write_text(track_code, encoding=\"utf-8\")\n",
             "import glob as _glob\n",
-            "for _old in _glob.glob(\"/content/temp/keyframe_shot*.png\") + _glob.glob(\"/content/temp/raw_shot*.mp4\") + [\"/content/temp/stage3c_status.json\", \"/content/temp/prompt_embeds.pt\"]:\n",
+            "for _old in _glob.glob(\"/content/temp/keyframe_shot*.png\") + _glob.glob(\"/content/temp/glasses_shot*.png\") + _glob.glob(\"/content/temp/raw_shot*.mp4\") + [\"/content/temp/glasses_meta.json\"] + [\"/content/temp/stage3c_status.json\", \"/content/temp/prompt_embeds.pt\"]:\n",
             "    if os.path.exists(_old):\n",
             "        os.remove(_old)\n",
             "Path(\"/content/temp/stage_3a.py\").write_text(stage_3a_code, encoding=\"utf-8\")\n",
@@ -2951,7 +3932,7 @@ cells = [
             "    with open(_st_p, \"r\", encoding=\"utf-8\") as _f:\n",
             "        _st = json.load(_f)\n",
             "    if _st.get(\"ai_ok\"):\n",
-            "        _m = \"\\n   \".join(f\"第{x['shot']}鏡：動態 {x['motion']}｜首幀相似度 {x.get('first_frame_sim', '-')}｜連續性 {x.get('continuity', '-')}\" for x in _st.get(\"shots\", []))\n",
+            "        _m = \"\\n   \".join(f\"第{x['shot']}鏡：動態 {x['motion']}｜首幀相似度 {x.get('first_frame_sim', '-')}｜連續性 {x.get('continuity', '-')}｜真實眼鏡追蹤信心 {x.get('glasses_conf', '-')}\" for x in _st.get(\"shots\", []))\n",
             "        print(f\"\\n✅ AI 動態影片完成｜引擎：{_st.get('engine')}\\n   {_m}\")\n",
             "        print(\"   (motion ≥ 3 代表人物/鏡頭有明顯動作；低於 3 時已自動重試並疊加推軌運鏡)\")\n",
             "    else:\n",
