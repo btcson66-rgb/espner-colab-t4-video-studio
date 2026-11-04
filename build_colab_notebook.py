@@ -778,6 +778,53 @@ def ltx_generate(pipe, vae32, kf_in, W, H, F, steps, pe, pam, npe, npam, seed, d
         video = vae32.decode(lat, ts, return_dict=False)[0]
     return pipe.video_processor.postprocess_video(video, output_type="pil")[0]
 
+WEAR = {sh["id"]: sh["wear"] for sh in SHOTS}
+try:
+    with open("/content/temp/glasses_meta.json", "r", encoding="utf-8") as _f:
+        GLASSES_META = json.load(_f)
+except Exception:
+    GLASSES_META = {}
+
+def apply_real_glasses(sid, out_p):
+    # AI 會把眼鏡畫變形 → 追蹤頭部運動，把 3A 的真實眼鏡逐格貼回 (產品 100% 真品)
+    gp = f"/content/temp/glasses_shot{sid}.png"
+    meta = GLASSES_META.get(str(sid))
+    if not WEAR.get(sid) or meta is None or not os.path.exists(gp):
+        return None
+    import espner_track as TRK
+    sx, sy = OUT_W / float(meta["src_w"]), OUT_H / float(meta["src_h"])
+    g = cv2.imread(gp, cv2.IMREAD_UNCHANGED)
+    g = cv2.resize(g, (max(1, int(round(g.shape[1] * sx))), max(1, int(round(g.shape[0] * sy)))), interpolation=cv2.INTER_AREA)
+    cap = cv2.VideoCapture(out_p)
+    frames = []
+    while True:
+        ok, fr = cap.read()
+        if not ok:
+            break
+        frames.append(fr)
+    cap.release()
+    if not frames:
+        return None
+    out, st = TRK.recomposite_glasses(frames, g, int(round(meta["x"] * sx)), int(round(meta["y"] * sy)),
+                                      face_box=load_face_box(sid, OUT_W, OUT_H), cleanup=True)
+    cv2.setNumThreads(0)
+    tmp = out_p.replace(".mp4", "_glasses.mp4")
+    vw = cv2.VideoWriter(tmp, cv2.VideoWriter_fourcc(*"mp4v"), 24.0, (OUT_W, OUT_H))
+    for fr in out:
+        vw.write(fr)
+    vw.release()
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", tmp, "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", out_p], check=True)
+    print(f"     👓 真實眼鏡逐格貼回：追蹤信心 {st.get('mean_conf', 0):.2f}｜貼回 {st.get('frames_overlaid', 0)} 格｜淡出 {st.get('frames_faded', 0)} 格")
+    return st
+
+def post_shot(sid, out_p, entry):
+    try:
+        st = apply_real_glasses(sid, out_p)
+        if st:
+            entry["glasses_conf"] = round(float(st.get("mean_conf", 0)), 2)
+    except Exception as e:
+        print(f"     ⚠️ 真實眼鏡貼回略過 ({e})")
+
 def ltx_preprocess(img, crf):
     # LTX 以壓縮影片訓練；乾淨照片當首幀容易產生「凍結」影片 → 先經過一次 H.264 壓縮
     src, enc = "/content/temp/_ltx_in.png", "/content/temp/_ltx_in.mp4"
@@ -875,7 +922,9 @@ try:
             fidelity_check(frames, kf_in, f"Wan2.2 第 {idx} 鏡")
             ms = motion_score(frames)
             finalize_ai_clip(frames, out_p, add_camera_move=ms < MOTION_MIN, shot_idx=idx, dur=DURS[idx])
-            STATUS["shots"].append({"shot": idx, "motion": round(ms, 2)})
+            entry = {"shot": idx, "motion": round(ms, 2)}
+            post_shot(idx, out_p, entry)
+            STATUS["shots"].append(entry)
             print(f"     ✓ 第 {idx} 段完成 (motion={ms:.2f}，耗時 {time.time() - t0:.1f}s)")
             del frames
             gc.collect()
@@ -924,7 +973,9 @@ try:
                         break
                     print("     ⚠️ 畫面幾乎靜止，換種子並加重首幀壓縮重試...")
                 finalize_ai_clip(best[1], out_p, add_camera_move=best[0] < MOTION_MIN, shot_idx=idx, dur=DURS[idx])
-                STATUS["shots"].append({"shot": idx, "motion": round(best[0], 2), "first_frame_sim": round(fid[0], 2), "continuity": round(fid[1], 2)})
+                entry = {"shot": idx, "motion": round(best[0], 2), "first_frame_sim": round(fid[0], 2), "continuity": round(fid[1], 2)}
+                post_shot(idx, out_p, entry)
+                STATUS["shots"].append(entry)
                 print(f"     ✓ 第 {idx} 段完成 (motion={best[0]:.2f})")
                 del frames, best
                 gc.collect()
@@ -963,7 +1014,9 @@ try:
             fidelity_check(frames, kf_in, f"SVD-XT 第 {idx} 鏡")
             ms = motion_score(frames)
             finalize_ai_clip(frames, out_p, add_camera_move=ms < MOTION_MIN, shot_idx=idx, dur=DURS[idx], src_fps=8)
-            STATUS["shots"].append({"shot": idx, "motion": round(ms, 2)})
+            entry = {"shot": idx, "motion": round(ms, 2)}
+            post_shot(idx, out_p, entry)
+            STATUS["shots"].append(entry)
             print(f"     ✓ 第 {idx} 段完成 (motion={ms:.2f})")
         STATUS["engine"] = "stabilityai/stable-video-diffusion-img2vid-xt"
     STATUS["ai_ok"] = True
