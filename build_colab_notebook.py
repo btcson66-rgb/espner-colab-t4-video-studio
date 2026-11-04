@@ -726,6 +726,20 @@ def motion_score(frames):
     step_diff = float(np.mean([np.abs(g[i + 1] - g[i]).mean() for i in range(len(g) - 1)])) * 4.0
     return max(end_diff, step_diff)
 
+def fidelity_check(frames, kf_img, tag):
+    # 圖生影片的第 1 格必須跟輸入首幀幾乎一樣；顏色反轉 (負片) 會得到負相關，亂碼色塊則連續性很低
+    def g(x):
+        return cv2.resize(cv2.cvtColor(_to_u8(x), cv2.COLOR_RGB2GRAY), (64, 112)).astype(np.float32).ravel()
+    k = g(np.asarray(kf_img.convert("RGB")))
+    c0 = float(np.corrcoef(k, g(frames[0]))[0, 1])
+    step = max(1, len(frames) // 8)
+    seq = [g(f) for f in frames[::step]]
+    cc = float(np.mean([np.corrcoef(seq[i], seq[i + 1])[0, 1] for i in range(len(seq) - 1)])) if len(seq) > 1 else 1.0
+    print(f"     畫面檢查：首幀相似度 {c0:.2f} (需 ≥ 0.5)｜連續性 {cc:.2f} (需 ≥ 0.55)")
+    if not (c0 >= 0.5 and cc >= 0.55):
+        raise RuntimeError(f"{tag} 輸出畫面異常 (首幀相似度 {c0:.2f}、連續性 {cc:.2f}；可能為顏色反轉或亂碼)")
+    return c0, cc
+
 def ltx_preprocess(img, crf):
     # LTX 以壓縮影片訓練；乾淨照片當首幀容易產生「凍結」影片 → 先經過一次 H.264 壓縮
     src, enc = "/content/temp/_ltx_in.png", "/content/temp/_ltx_in.mp4"
@@ -811,6 +825,7 @@ try:
                 generator=torch.Generator(device="cuda").manual_seed(20261103 + idx)
             ).frames[0]
             check_frames(frames, "Wan2.2")
+            fidelity_check(frames, kf_in, f"Wan2.2 第 {idx} 鏡")
             ms = motion_score(frames)
             finalize_ai_clip(frames, out_p, add_camera_move=ms < MOTION_MIN, shot_idx=idx, dur=DURS[idx])
             STATUS["shots"].append({"shot": idx, "motion": round(ms, 2)})
@@ -855,6 +870,7 @@ try:
                         generator=torch.Generator("cuda").manual_seed(42 + idx + 1000 * attempt)
                     ).frames[0]
                     check_frames(frames, "LTX-Video")
+                    fid = fidelity_check(frames, kf_in, f"{repo} 第 {idx} 鏡")
                     ms = motion_score(frames)
                     print(f"     動態量 motion={ms:.2f} (門檻 {MOTION_MIN})，耗時 {time.time() - t0:.1f}s")
                     if best is None or ms > best[0]:
@@ -863,7 +879,7 @@ try:
                         break
                     print("     ⚠️ 畫面幾乎靜止，換種子並加重首幀壓縮重試...")
                 finalize_ai_clip(best[1], out_p, add_camera_move=best[0] < MOTION_MIN, shot_idx=idx, dur=DURS[idx])
-                STATUS["shots"].append({"shot": idx, "motion": round(best[0], 2)})
+                STATUS["shots"].append({"shot": idx, "motion": round(best[0], 2), "first_frame_sim": round(fid[0], 2), "continuity": round(fid[1], 2)})
                 print(f"     ✓ 第 {idx} 段完成 (motion={best[0]:.2f})")
                 del frames, best
                 gc.collect()
@@ -899,6 +915,7 @@ try:
             frames = pipe(kf_in, decode_chunk_size=2, num_frames=25, motion_bucket_id=160, noise_aug_strength=0.03,
                           generator=torch.Generator("cuda").manual_seed(7 + idx)).frames[0]
             check_frames(frames, "SVD-XT")
+            fidelity_check(frames, kf_in, f"SVD-XT 第 {idx} 鏡")
             ms = motion_score(frames)
             finalize_ai_clip(frames, out_p, add_camera_move=ms < MOTION_MIN, shot_idx=idx, dur=DURS[idx], src_fps=8)
             STATUS["shots"].append({"shot": idx, "motion": round(ms, 2)})
@@ -2537,7 +2554,7 @@ def iter_reference_timeline():
         if ci is not None and ci < len(copies) and copies[ci]:
             lines = [x for x in copies[ci].split("/") if x.strip()]
             layer = T.render_copy_layer(W, H, lines, brand_mark=False, align="left")
-            if T.text_color_for(frames[len(frames) // 2], layer) == "light":
+            if T.text_color_for(G.grade_frame(frames[len(frames) // 2], plan["grade"], lut=lut, strength=0.5), layer) == "light":
                 layer = T.render_copy_layer(W, H, lines, brand_mark=False, align="left", color="light")
         for i, fr in enumerate(frames):
             t = i / 24.0
@@ -2906,8 +2923,8 @@ cells = [
             "    with open(_st_p, \"r\", encoding=\"utf-8\") as _f:\n",
             "        _st = json.load(_f)\n",
             "    if _st.get(\"ai_ok\"):\n",
-            "        _m = \", \".join(f\"第{x['shot']}段 motion={x['motion']}\" for x in _st.get(\"shots\", []))\n",
-            "        print(f\"\\n✅ AI 動態影片完成｜引擎：{_st.get('engine')}｜{_m}\")\n",
+            "        _m = \"\\n   \".join(f\"第{x['shot']}鏡：動態 {x['motion']}｜首幀相似度 {x.get('first_frame_sim', '-')}｜連續性 {x.get('continuity', '-')}\" for x in _st.get(\"shots\", []))\n",
+            "        print(f\"\\n✅ AI 動態影片完成｜引擎：{_st.get('engine')}\\n   {_m}\")\n",
             "        print(\"   (motion ≥ 3 代表人物/鏡頭有明顯動作；低於 3 時已自動重試並疊加推軌運鏡)\")\n",
             "    else:\n",
             "        print(\"\\n⚠️ 注意：AI 影片模型未成功，本次使用『2.5D 視差運鏡』保底畫面 (人物不會有肢體動作)。\")\n",
