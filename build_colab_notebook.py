@@ -2728,6 +2728,485 @@ def mux_audio(video_in, audio_in, video_out, target_lufs=-16.0, fade_in=0.5, fad
     return video_out
 """
 
+QC_CODE = r"""
+# -*- coding: utf-8 -*-
+# ESPNER video quality check (espner_qc.py)
+#
+# Scores a finished ad video shot by shot and turns the numbers into a plain
+# Traditional Chinese report for a non-technical user.
+#
+# Public API:
+#   analyze_shot(frames_bgr)              -> dict of metrics for one shot
+#   analyze_video(mp4_path, shot_bounds)  -> dict with per-shot results, grade, issues
+#   format_report(result)                 -> zh-TW multi-line report string
+#
+# Dependencies: numpy, opencv-python-headless, ffprobe CLI (no torch, no scipy).
+#
+# Metric definitions
+#   sharpness           median variance of Laplacian over frames (gray, 360 px wide)
+#   sharpness_min_ratio worst contrast-normalised frame / median ("mushy" frames);
+#                       frames without contrast (fades to white) are skipped
+#   ghosting            share of frames flagged by the motion-compensated ghost test.
+#                       Each frame is predicted from its t-1 and t+1 neighbours after DIS
+#                       optical flow (180 px wide) has removed real motion. A frame is
+#                       flagged when the leftover error is large on average (> GHOST_MEAN)
+#                       and a visible share of pixels (> GHOST_PIX_FRAC) is off by more
+#                       than GHOST_PIX_DIFF. Double exposure and AI morph flicker survive
+#                       the motion model; ordinary camera motion does not.
+#   flicker             std of per-frame mean luma after removing a moving average (fades
+#                       and slow ramps are not flicker)
+#   motion              mean absolute difference between consecutive gray frames (0..255)
+#   face_rate           share of every 8th frame where the Haar frontal face cascade fires
+#   skin_frac           share of skin-tone pixels; used to tell people from product shots
+#
+# Calibration (reference ads refA/refB, v.mp4, and a synthetic double-exposure clip):
+#   ghosting per shot: refs 0.00-0.06, synthetic 0.56   -> GHOST_SHOT_FRAC 0.15
+#   motion per shot:   v.mp4 0.10-0.31, refs >= 0.84    -> STATIC_MOTION 0.575
+#   motion, fast refA whip shot 10.4, same at 2x speed 15.9 -> VIOLENT_MOTION 14
+#   sharpness: refs 106-613, synthetic 21              -> BLUR_LIMIT 40
+#   Haar frontal face misses back and profile shots, so the face check is a minor
+#   (penalty 5) hint, gated by skin presence.
+
+import json
+import os
+import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+import cv2
+import numpy as np
+
+ANALYSIS_WIDTH = 360          # sharpness, luma and face use this width
+FLOW_WIDTH = 180              # optical flow / ghost residual use this width
+FACE_EVERY = 8                # Haar face test on every 8th frame
+CUT_PIXDIFF = 25.0            # mean abs diff of 96x54 gray frames: hard cut
+CUT_PIXDIFF_SOFT = 12.0       # soft cut: needs a histogram change as well
+CUT_HIST = 0.25               # Bhattacharyya distance of HS histograms
+MIN_SHOT_FRAMES = 8           # shorter segments are merged into the previous shot
+
+GHOST_MEAN = 2.2              # average residual (0..255) the motion model cannot explain
+GHOST_PIX_FRAC = 0.01         # share of pixels with a large residual
+GHOST_PIX_DIFF = 20.0         # what counts as a large residual (0..255)
+GHOST_SHOT_FRAC = 0.15        # shot is ghosted when this share of its frames is flagged
+
+BLUR_LIMIT = 40.0             # median Laplacian variance at 360 px below this = blurred
+MUSHY_RATIO = 0.25            # worst contrast-normalised frame below this x median = mushy
+FLICKER_TREND = 15            # moving-average window (frames) removed before the flicker std
+FLICKER_LUMA = 4.0            # std of detrended per-frame mean luma (fades are not flicker)
+STATIC_MOTION = 0.575         # consecutive-frame mean diff below this = almost no motion
+VIOLENT_MOTION = 14.0         # consecutive-frame mean diff above this = too violent
+FACE_MIN_RATE = 0.05          # below this share of sampled frames with a frontal face...
+SKIN_MIN = 0.08               # ...AND this share of skin-tone pixels = person without a face
+ENDCARD_BRIGHT = 0.60         # share of near-white pixels that marks an endcard
+
+PENALTY = {
+    "ghost": 40, "blur": 25, "mushy": 15, "flicker": 15,
+    "static": 25, "violent": 20, "face": 5,
+}
+
+PHRASE = {
+    "ghost": "有殘影（畫面疑似重影或變形）",
+    "blur": "畫面模糊",
+    "mushy": "部分畫面突然變糊",
+    "flicker": "畫面亮度閃爍",
+    "static": "幾乎沒有動",
+    "violent": "動作太劇烈",
+    "face": "人物臉部偵測不到（可能變形）",
+}
+
+SUGGEST = {
+    "ghost": "重新生成有殘影的段落，並降低人物動作幅度或鏡頭移動速度。",
+    "blur": "提高輸出解析度，或重新生成模糊的段落。",
+    "mushy": "檢查變糊段落的前後銜接，必要時剪掉變糊的幾秒。",
+    "flicker": "統一各段亮度與色調，避免忽明忽暗。",
+    "static": "加入推近、平移或人物轉頭等動作，讓畫面不要靜止太久。",
+    "violent": "放慢動作速度，讓人物與鏡頭的移動更平順。",
+    "face": "確認人物臉部清楚可見，必要時重新生成該段。",
+}
+
+_FACE_CASCADE = None
+_TLS = threading.local()    # one DIS flow object per worker thread
+
+
+def _face_cascade():
+    # Haar frontal face cascade, loaded once (bundled with opencv-python-headless).
+    global _FACE_CASCADE
+    if _FACE_CASCADE is None:
+        _FACE_CASCADE = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    return _FACE_CASCADE
+
+
+def _dis():
+    # DIS optical flow (medium preset), one instance per thread.
+    if getattr(_TLS, "dis", None) is None:
+        _TLS.dis = cv2.DISOpticalFlow_create(cv2.DISOPTICAL_FLOW_PRESET_MEDIUM)
+    return _TLS.dis
+
+
+def _resize_w(img, width=ANALYSIS_WIDTH):
+    # Resize keeping aspect ratio to the given width.
+    h, w = img.shape[:2]
+    if w == width:
+        return img
+    height = max(1, int(round(h * width / float(w))))
+    return cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
+
+
+def _ghost_flags(g360):
+    # Motion-compensated ghost test. g360: list of uint8 gray frames (360 px wide).
+    # Returns (flags bool array, mean residual array, pixel-fraction array).
+    n = len(g360)
+    flags = np.zeros(n, dtype=bool)
+    mean_res = np.zeros(n)
+    pix_frac = np.zeros(n)
+    if n < 3:
+        return flags, mean_res, pix_frac
+    small = [cv2.resize(g, (FLOW_WIDTH, max(1, int(round(g.shape[0] / 2.0)))),
+                        interpolation=cv2.INTER_AREA) for g in g360]
+    H, W = small[0].shape
+    gx, gy = np.meshgrid(np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32))
+
+    def one(t):
+        # Motion-compensated residual for frame t (independent of the others).
+        cur = small[t]
+        dis = _dis()
+        u = dis.calc(cur, small[t - 1], None)   # cur(x) ~ prev(x + u)
+        v = dis.calc(cur, small[t + 1], None)   # cur(x) ~ next(x + v)
+        pm = cv2.remap(small[t - 1].astype(np.float32), gx + u[..., 0], gy + u[..., 1],
+                       cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        pn = cv2.remap(small[t + 1].astype(np.float32), gx + v[..., 0], gy + v[..., 1],
+                       cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        d = np.abs(cur.astype(np.float32) - 0.5 * (pm + pn))
+        return t, float(d.mean()), float(np.mean(d > GHOST_PIX_DIFF))
+
+    workers = max(1, min(4, os.cpu_count() or 1))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for t, mr, pf in ex.map(one, range(1, n - 1)):
+            mean_res[t] = mr
+            pix_frac[t] = pf
+            flags[t] = (mr > GHOST_MEAN) and (pf > GHOST_PIX_FRAC)
+    return flags, mean_res, pix_frac
+
+
+def _face_rate(g360):
+    # Share of every FACE_EVERY-th frame where the Haar frontal cascade finds a face.
+    casc = _face_cascade()
+    if casc.empty():
+        return 0.0
+    idx = list(range(0, len(g360), FACE_EVERY))
+    if not idx:
+        return 0.0
+    hits = 0
+    for i in idx:
+        faces = casc.detectMultiScale(cv2.equalizeHist(g360[i]), scaleFactor=1.1,
+                                      minNeighbors=5, minSize=(24, 24))
+        if len(faces) > 0:
+            hits += 1
+    return hits / float(len(idx))
+
+
+def _skin_frac(bgr):
+    # Share of pixels in a skin-tone band (HSV). Separates people from product shots.
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    m = (hsv[..., 0] <= 22) & (hsv[..., 1] >= 35) & (hsv[..., 1] <= 170) & (hsv[..., 2] >= 90)
+    return float(np.mean(m))
+
+
+def _metrics(bgr360):
+    # All shot metrics from a list of 360 px wide BGR frames.
+    n = len(bgr360)
+    if n == 0:
+        return {"frames": 0}
+    g360 = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in bgr360]
+    lap = np.array([float(cv2.Laplacian(g, cv2.CV_64F).var()) for g in g360])
+    var = np.array([float(g.std()) ** 2 for g in g360])
+    med = max(float(np.median(lap)), 1e-6)
+    # Mushy: worst frame relative to the median, judged only on frames that have contrast,
+    # normalised by contrast so that fades to white do not look like blur.
+    content = var >= 0.25 * max(float(np.median(var)), 1e-6)
+    if int(content.sum()) >= 3:
+        norm = lap[content] / np.maximum(var[content], 1.0)
+        min_ratio = float(np.min(norm) / max(float(np.median(norm)), 1e-9))
+    else:
+        min_ratio = 1.0
+    flags, mean_res, _pix = _ghost_flags(g360)
+    means = np.array([float(g.mean()) for g in g360])
+    if n > FLICKER_TREND:
+        k = np.ones(FLICKER_TREND) / FLICKER_TREND
+        trend = np.convolve(np.pad(means, FLICKER_TREND // 2, mode="edge"), k, mode="valid")[:n]
+        flicker = float(np.std(means - trend))
+    else:
+        flicker = float(np.std(means))
+    if n >= 2:
+        motion = float(np.mean([np.mean(np.abs(g360[i].astype(np.int16) - g360[i - 1].astype(np.int16)))
+                                for i in range(1, n)]))
+    else:
+        motion = 0.0
+    sample = bgr360[::FACE_EVERY]
+    skin = float(np.mean([_skin_frac(f) for f in sample]))
+    inner = slice(1, max(1, n - 1))
+    return {
+        "frames": n,
+        "sharpness": med,
+        "sharpness_min_ratio": min_ratio,
+        "ghosting": float(np.mean(flags)),
+        "ghost_mean_res_p50": float(np.median(mean_res[inner])) if n >= 3 else 0.0,
+        "flicker": flicker,
+        "motion": motion,
+        "face_rate": _face_rate(g360),
+        "skin_frac": skin,
+        "mean_luma": float(np.mean(means)),
+        "bright_frac": float(np.mean([np.mean(g > 235) for g in g360])),
+    }
+
+
+def analyze_shot(frames_bgr):
+    # Metrics for one shot. frames_bgr: list of HxWx3 uint8 BGR frames in order.
+    # Returns the metric dict described in the module header.
+    return _metrics([_resize_w(f) for f in frames_bgr])
+
+
+def _probe_audio(mp4_path):
+    # True when ffprobe finds at least one audio stream.
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=codec_type", "-of", "json", mp4_path],
+            capture_output=True, text=True, timeout=60)
+        data = json.loads(out.stdout or "{}")
+        return len(data.get("streams", [])) > 0
+    except Exception:
+        return False
+
+
+def _hs_hist(small_bgr):
+    # Hue/saturation histogram used as a secondary cut signal.
+    hsv = cv2.cvtColor(small_bgr, cv2.COLOR_BGR2HSV)
+    h = cv2.calcHist([hsv], [0, 1], None, [24, 8], [0, 180, 0, 256])
+    cv2.normalize(h, h, 0, 1, cv2.NORM_MINMAX)
+    return h
+
+
+def _detect_shots(pix, hists):
+    # A cut is a hard jump in pixels (96x54 gray), or a softer jump that also
+    # changes the colour histogram. Short segments are merged into the previous one.
+    n = len(pix)
+    if n == 0:
+        return []
+    cuts = [0]
+    for i in range(1, n):
+        d_pix = float(np.mean(np.abs(pix[i] - pix[i - 1])))
+        d_hist = cv2.compareHist(hists[i - 1], hists[i], cv2.HISTCMP_BHATTACHARYYA)
+        if d_pix >= CUT_PIXDIFF or (d_pix >= CUT_PIXDIFF_SOFT and d_hist >= CUT_HIST):
+            cuts.append(i)
+    bounds = []
+    for j, s in enumerate(cuts):
+        e = cuts[j + 1] if j + 1 < len(cuts) else n
+        bounds.append([s, e])
+    merged = []
+    for s, e in bounds:
+        if merged and (e - s) < MIN_SHOT_FRAMES:
+            merged[-1][1] = e
+        else:
+            merged.append([s, e])
+    if len(merged) > 1 and (merged[0][1] - merged[0][0]) < MIN_SHOT_FRAMES:
+        merged[1][0] = merged[0][0]
+        merged.pop(0)
+    return [(s, e) for s, e in merged]
+
+
+def _judge(m):
+    # Turn one shot's metrics into a list of problem keys (see PENALTY).
+    problems = []
+    if m.get("frames", 0) == 0:
+        return problems
+    endcard = m["bright_frac"] >= ENDCARD_BRIGHT
+    if m["ghosting"] >= GHOST_SHOT_FRAC:
+        problems.append("ghost")
+    if m["sharpness"] < BLUR_LIMIT:
+        problems.append("blur")
+    if m["sharpness_min_ratio"] < MUSHY_RATIO and "blur" not in problems:
+        problems.append("mushy")
+    if m["flicker"] > FLICKER_LUMA:
+        problems.append("flicker")
+    if not endcard and m["motion"] < STATIC_MOTION:
+        problems.append("static")
+    if m["motion"] > VIOLENT_MOTION:
+        problems.append("violent")
+        # Very fast motion breaks the flow model and looks like ghosting; attribute it to motion.
+        if "ghost" in problems:
+            problems.remove("ghost")
+    if not endcard and m["skin_frac"] >= SKIN_MIN and m["face_rate"] < FACE_MIN_RATE and m["frames"] >= 8:
+        problems.append("face")
+    return problems
+
+
+def _shot_score(problems):
+    return max(0, 100 - sum(PENALTY[p] for p in problems))
+
+
+def _letter(score):
+    if score >= 85:
+        return "A"
+    if score >= 72:
+        return "B"
+    if score >= 58:
+        return "C"
+    return "D"
+
+
+def analyze_video(mp4_path, shot_bounds=None):
+    # Analyze an mp4 shot by shot.
+    # shot_bounds: list of (start_frame, end_frame) with end exclusive, or None to
+    #              detect cuts automatically.
+    cap = cv2.VideoCapture(mp4_path)
+    if not cap.isOpened():
+        raise IOError("cannot open video: %s" % mp4_path)
+    fps = float(cap.get(cv2.CAP_PROP_FPS)) or 24.0
+    small_frames = []
+    pix = []
+    hists = []
+    width = height = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        if width == 0:
+            height, width = frame.shape[:2]
+        small = _resize_w(frame)
+        small_frames.append(small)
+        if shot_bounds is None:
+            g96 = cv2.resize(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), (96, 54),
+                             interpolation=cv2.INTER_AREA).astype(np.float32)
+            pix.append(g96)
+            hists.append(_hs_hist(small))
+    cap.release()
+    n = len(small_frames)
+    duration = n / fps if fps > 0 else 0.0
+
+    if shot_bounds is None:
+        bounds = _detect_shots(pix, hists)
+    else:
+        bounds = []
+        for s, e in shot_bounds:
+            s, e = max(0, int(s)), min(n, int(e))
+            if e > s:
+                bounds.append((s, e))
+
+    shots = []
+    for idx, (s, e) in enumerate(bounds):
+        m = _metrics(small_frames[s:e])
+        problems = _judge(m)
+        score = _shot_score(problems)
+        shot = dict(m)
+        shot.update({
+            "index": idx + 1,
+            "start_frame": s,
+            "end_frame": e,
+            "start_s": round(s / fps, 2),
+            "end_s": round(e / fps, 2),
+            "problems": problems,
+            "score": score,
+            "grade": _letter(score),
+        })
+        shots.append(shot)
+    small_frames = None
+
+    has_audio = _probe_audio(mp4_path)
+    issues = []
+    for sh in shots:
+        if sh["problems"]:
+            names = [PHRASE[p] for p in sorted(sh["problems"], key=lambda k: -PENALTY[k])]
+            issues.append("第%d段（%.1f–%.1f 秒）：%s。" % (
+                sh["index"], sh["start_s"], sh["end_s"], "、".join(names)))
+    if not has_audio:
+        issues.append("影片沒有聲音軌道，若需要配樂請重新輸出。")
+
+    total = sum(sh["end_frame"] - sh["start_frame"] for sh in shots)
+    if total > 0:
+        overall_score = sum(sh["score"] * (sh["end_frame"] - sh["start_frame"])
+                            for sh in shots) / float(total)
+        ghost_share = sum(sh["end_frame"] - sh["start_frame"] for sh in shots
+                          if "ghost" in sh["problems"]) / float(total)
+    else:
+        overall_score, ghost_share = 0.0, 0.0
+    overall = _letter(overall_score)
+    if ghost_share >= 0.25 and overall in ("A", "B"):
+        overall = "C"
+
+    return {
+        "path": mp4_path,
+        "duration": round(duration, 2),
+        "fps": round(fps, 2),
+        "size": [width, height],
+        "has_audio": has_audio,
+        "shots": shots,
+        "overall_score": round(overall_score, 1),
+        "overall_grade": overall,
+        "issues": issues,
+    }
+
+
+_GRADE_TEXT = {
+    "A": "優良，可直接使用",
+    "B": "良好，有小問題可視情況修改",
+    "C": "尚可，建議修改後再發布",
+    "D": "不建議使用，請重新生成",
+}
+
+
+def _suggestions(result):
+    # Top 2 suggestions, weighted by how much footage each problem touches.
+    weight = {}
+    for sh in result.get("shots", []):
+        for p in sh.get("problems", []):
+            weight[p] = weight.get(p, 0) + PENALTY[p] * (sh["end_frame"] - sh["start_frame"])
+    ranked = sorted(weight.items(), key=lambda kv: -kv[1])
+    out = [SUGGEST[p] for p, _ in ranked[:2]]
+    if not out:
+        out = ["畫面與動作表現良好，可以直接使用。"]
+    return out
+
+
+def format_report(result):
+    # Plain zh-TW report for a non-technical user.
+    lines = []
+    w, h = result.get("size", [0, 0])
+    lines.append("【影片品質檢查報告】")
+    lines.append("影片長度：%.1f 秒｜解析度：%dx%d｜聲音：%s" % (
+        result.get("duration", 0.0), w, h, "有" if result.get("has_audio") else "無"))
+    lines.append("")
+    lines.append("逐段檢查：")
+    if not result.get("shots"):
+        lines.append("（找不到可分析的畫面段落）")
+    for sh in result.get("shots", []):
+        time_txt = "%.1f–%.1f 秒" % (sh["start_s"], sh["end_s"])
+        if not sh["problems"]:
+            lines.append("✅ 第%d段（%s）：畫面清晰，動作自然" % (sh["index"], time_txt))
+            continue
+        probs = set(sh["problems"])
+        labels = []
+        if "blur" in probs and "ghost" in probs:
+            labels.append("畫面模糊／有殘影")
+            probs -= {"blur", "ghost"}
+        labels += [PHRASE[p] for p in sorted(probs, key=lambda k: -PENALTY[k])]
+        lines.append("⚠️ 第%d段（%s）：%s" % (sh["index"], time_txt, "、".join(labels)))
+    lines.append("")
+    grade = result.get("overall_grade", "D")
+    lines.append("整體評等：%s（%s）" % (grade, _GRADE_TEXT.get(grade, "")))
+    lines.append("")
+    lines.append("建議：")
+    for i, s in enumerate(_suggestions(result), 1):
+        lines.append("%d. %s" % (i, s))
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    import sys
+    print(format_report(analyze_video(sys.argv[1])))
+"""
+
 STEP2_CODE = r"""
 #@title 📸 步驟 2：設定產品名稱、廣告風格並上傳產品正面圖片
 import os, json
@@ -3208,6 +3687,25 @@ else:
         print(f"⚠️ 配樂合成失敗 ({e})，輸出無聲版本")
         shutil.copy2(video_noaudio, final_mp4)
 
+# 🔍 自動品質檢查報告 (只檢查故事鏡頭；片尾沒有人臉不檢查)
+qc_txt = f"/content/output/ESPNER_{safe_name}_品質報告.txt"
+try:
+    import espner_qc as QC
+    bounds = None
+    if IS_REF:
+        bounds, acc = [], 0
+        for _sh in resolve_shots(cfg, cfg.get("custom_scene_prompt_en", "")):
+            n_sh = int(round(_sh["dur"] * 24))
+            bounds.append((acc, acc + n_sh))
+            acc += n_sh
+    qc_report = QC.format_report(QC.analyze_video(final_mp4, shot_bounds=bounds))
+    print("\n" + qc_report)
+    with open(qc_txt, "w", encoding="utf-8") as _f:
+        _f.write(qc_report)
+except Exception as e:
+    qc_txt = None
+    print(f"ℹ️ 品質檢查略過 ({e})")
+
 sheet_jpg = f"/content/output/ESPNER_{safe_name}_QA_sheet.jpg"
 tw, th = (426, 240) if w > h else (240, 426)
 tiles = []
@@ -3224,6 +3722,8 @@ if os.path.isdir("/content/drive/MyDrive"):
     os.makedirs(drive_out_dir, exist_ok=True)
     shutil.copy2(final_mp4, os.path.join(drive_out_dir, os.path.basename(final_mp4)))
     shutil.copy2(sheet_jpg, os.path.join(drive_out_dir, os.path.basename(sheet_jpg)))
+    if qc_txt and os.path.exists(qc_txt):
+        shutil.copy2(qc_txt, os.path.join(drive_out_dir, os.path.basename(qc_txt)))
     print(f"☁️ 已自動同步備份至 Google 雲端硬碟：{drive_out_dir}")
 
 dur_sec = n_written / 24.0
@@ -3242,11 +3742,11 @@ def step4_lines():
     out = []
     for ln in cell_lines(STEP4_CODE):
         if ln.strip() == "# __EMBED_MODULES__":
-            for var, fname, code in [("titles_code", "espner_titles.py", TITLES_CODE), ("grade_code", "espner_grade.py", GRADE_CODE), ("audio_code", "espner_audio.py", AUDIO_CODE)]:
+            for var, fname, code in [("titles_code", "espner_titles.py", TITLES_CODE), ("grade_code", "espner_grade.py", GRADE_CODE), ("audio_code", "espner_audio.py", AUDIO_CODE), ("qc_code", "espner_qc.py", QC_CODE)]:
                 out += embed_stage(var, code)
                 out.append(f'open("/content/temp/{fname}", "w", encoding="utf-8").write({var})\n')
             out.append("import importlib, sys as _sys\n")
-            out.append("for _m in (\"espner_titles\", \"espner_grade\", \"espner_audio\", \"shot_plan\"):\n")
+            out.append("for _m in (\"espner_titles\", \"espner_grade\", \"espner_audio\", \"espner_qc\", \"shot_plan\"):\n")
             out.append("    _sys.modules.pop(_m, None)\n")
         else:
             out.append(ln)
