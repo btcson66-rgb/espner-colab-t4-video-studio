@@ -240,6 +240,411 @@ def output_size(cfg):
     return (1920, 1080) if cfg.get("aspect", "9:16") == "16:9" else (720, 1280)
 """
 
+TRACK_CODE = r"""
+# espner_track.py - keep the product's REAL glasses on the face through a generated clip.
+# Deps: numpy, opencv-python-headless (<5). No triple double quotes in this file on purpose.
+#
+# Method: sparse LK tracking (half resolution) of face/hair features AROUND the glasses
+# (glasses area masked out), per-frame similarity (frame0 -> frame i) fitted with RANSAC
+# from points that carry their frame-0 coordinates (no matrix-product drift), periodic
+# direct re-anchoring to frame 0, zero-phase One-Euro smoothing, confidence-driven fade,
+# premultiplied-alpha warp + soft contact shadow composite.
+import time
+import numpy as np
+import cv2
+
+cv2.setNumThreads(1)
+
+_LK = dict(winSize=(21, 21), maxLevel=3,
+           criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 20, 0.01))
+_LK_WIDE = dict(winSize=(31, 31), maxLevel=4,
+                criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
+
+
+def _apply(M, pts):
+    # M: 2x3, pts: Nx2
+    return pts @ M[:, :2].T + M[:, 2]
+
+
+def _inv(M):
+    return cv2.invertAffineTransform(M)
+
+
+def _params_from_M(M, c0):
+    A = M[:, :2]
+    s = float(np.sqrt(abs(np.linalg.det(A))) + 1e-9)
+    ang = float(np.arctan2(A[1, 0], A[0, 0]))
+    c = _apply(M, np.asarray(c0, np.float64)[None])[0]
+    return np.array([c[0], c[1], np.log(s), ang])
+
+
+def _M_from_params(p, c0):
+    s = np.exp(p[2])
+    ca, sa = np.cos(p[3]) * s, np.sin(p[3]) * s
+    A = np.array([[ca, -sa], [sa, ca]])
+    c0 = np.asarray(c0, np.float64)
+    t = np.array([p[0], p[1]]) - A @ c0
+    return np.hstack([A, t[:, None]])
+
+
+class _OneEuro:
+    def __init__(self, fps, min_cutoff, beta, dcutoff=1.0):
+        self.fps, self.mc, self.beta, self.dc = fps, min_cutoff, beta, dcutoff
+
+    def _alpha(self, cutoff):
+        tau = 1.0 / (2 * np.pi * cutoff)
+        return 1.0 / (1.0 + tau * self.fps)
+
+    def run(self, x):
+        # x: N x D (D channels in px-equivalent units)
+        out = np.empty_like(x)
+        out[0] = x[0]
+        dx_prev = np.zeros(x.shape[1])
+        for i in range(1, len(x)):
+            dx = (x[i] - out[i - 1]) * self.fps
+            a_d = self._alpha(self.dc)
+            dx_hat = a_d * dx + (1 - a_d) * dx_prev
+            dx_prev = dx_hat
+            cutoff = self.mc + self.beta * np.abs(dx_hat)
+            a = np.array([self._alpha(c) for c in cutoff])
+            out[i] = a * x[i] + (1 - a) * out[i - 1]
+        return out
+
+
+def _smooth_params(P, R, fps, min_cutoff=2.0, beta=0.05):
+    # zero-phase: filter forward and backward, average. Work in px-equivalent units.
+    X = P.copy()
+    X[:, 2] *= R
+    X[:, 3] *= R
+    f = _OneEuro(fps, min_cutoff, beta)
+    a = f.run(X)
+    b = f.run(X[::-1].copy())[::-1]
+    Y = 0.5 * (a + b)
+    Y[:, 2] /= R
+    Y[:, 3] /= R
+    return Y
+
+
+def _roi_polys(c0, gw, gh, face_box, shape_full):
+    # returns (roi_ellipse_params, glasses_exclusion_rect) in frame-0 full-res coords
+    H, W = shape_full
+    if face_box is not None:
+        fx, fy, fw, fh = face_box
+        cx, cy = fx + fw / 2.0, fy + fh / 2.0
+        rw, rh = fw * 0.75, fh * 0.75
+    else:
+        cx, cy = c0[0], c0[1] + gh * 0.6
+        rw, rh = gw * 1.7, gw * 2.0
+    ex = 0.22 * gw
+    exclude = (c0[0] - gw / 2 - ex, c0[1] - gh / 2 - ex * 0.8,
+               c0[0] + gw / 2 + ex, c0[1] + gh / 2 + ex * 0.8)
+    return (cx, cy, rw, rh), exclude
+
+
+def _make_mask(M_full, roi, excl, shape_half, s):
+    # draw ROI ellipse and glasses exclusion at the current pose, in half-res coords
+    h, w = shape_half
+    cx, cy, rw, rh = roi
+    th = np.linspace(0, 2 * np.pi, 48, endpoint=False)
+    ell = np.stack([cx + rw * np.cos(th), cy + rh * np.sin(th)], 1)
+    x0, y0, x1, y1 = excl
+    box = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], np.float64)
+    m = np.zeros((h, w), np.uint8)
+    e = (_apply(M_full, ell) * s).astype(np.int32)
+    cv2.fillConvexPoly(m, e, 255)
+    b = (_apply(M_full, box) * s).astype(np.int32)
+    cv2.fillConvexPoly(m, b, 0)
+    return m
+
+
+def _sharp(gray, mask):
+    lap = cv2.Laplacian(cv2.GaussianBlur(gray, (3, 3), 0), cv2.CV_16S, ksize=3)
+    v = np.abs(lap)
+    sel = mask > 0
+    return float(v[sel].mean()) + 1e-6 if sel.any() else 1e-6
+
+
+def _fit(p0, p1, thr=2.0):
+    if len(p0) < 4:
+        return None, None
+    M, inl = cv2.estimateAffinePartial2D(p0.reshape(-1, 1, 2), p1.reshape(-1, 1, 2),
+                                         method=cv2.RANSAC, ransacReprojThreshold=thr,
+                                         maxIters=400, confidence=0.99, refineIters=10)
+    if M is None:
+        return None, None
+    return M.astype(np.float64), inl.ravel().astype(bool)
+
+
+def _detect(gray, mask, n, existing=None):
+    m = mask.copy()
+    if existing is not None and len(existing):
+        for p in existing:
+            cv2.circle(m, (int(p[0]), int(p[1])), 5, 0, -1)
+    pts = cv2.goodFeaturesToTrack(gray, maxCorners=n, qualityLevel=0.01, minDistance=6,
+                                  mask=m, blockSize=5)
+    if pts is None:
+        return np.zeros((0, 2), np.float32)
+    return pts.reshape(-1, 2).astype(np.float32)
+
+
+def _lk_fb(g_a, g_b, pa, fb_thr, init=None, wide=False):
+    kw = _LK_WIDE if wide else _LK
+    if init is not None:
+        pb, st, _ = cv2.calcOpticalFlowPyrLK(g_a, g_b, pa.reshape(-1, 1, 2), init.reshape(-1, 1, 2),
+                                             flags=cv2.OPTFLOW_USE_INITIAL_FLOW, **kw)
+        back, st2, _ = cv2.calcOpticalFlowPyrLK(g_b, g_a, pb, pa.reshape(-1, 1, 2).copy(),
+                                                flags=cv2.OPTFLOW_USE_INITIAL_FLOW, **kw)
+    else:
+        pb, st, _ = cv2.calcOpticalFlowPyrLK(g_a, g_b, pa.reshape(-1, 1, 2), None, **kw)
+        back, st2, _ = cv2.calcOpticalFlowPyrLK(g_b, g_a, pb, None, **kw)
+    pb = pb.reshape(-1, 2)
+    back = back.reshape(-1, 2)
+    ok = (st.ravel() == 1) & (st2.ravel() == 1)
+    ok &= np.linalg.norm(back - pa, axis=1) < fb_thr
+    return pb, ok
+
+
+def _cleanup_patch(bg8, a_full, ring_r):
+    # replace bright melted residue in a ring around the real glasses by inpainted skin/hair.
+    # all mask work at half res for speed; blend back at full res.
+    h, w = bg8.shape[:2]
+    hw, hh = max(2, w // 2), max(2, h // 2)
+    sm = cv2.resize(bg8, (hw, hh), interpolation=cv2.INTER_AREA)
+    a = cv2.resize(a_full, (hw, hh), interpolation=cv2.INTER_AREA)
+    k = max(1, int(ring_r * 0.5))
+    ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1))
+    core = (a > 0.3).astype(np.uint8)
+    near = cv2.dilate(core, ker)
+    ring = (near > 0) & (a <= 0.5)
+    k2 = max(2, int(ring_r * 0.9))
+    far = cv2.dilate(core, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k2 + 1, 2 * k2 + 1)))
+    band = (far > 0) & (near == 0)
+    if band.sum() < 30:
+        return bg8
+    lum = cv2.GaussianBlur(cv2.cvtColor(sm, cv2.COLOR_BGR2GRAY).astype(np.float32), (0, 0), 1.0)
+    ref = float(np.percentile(lum[band], 60))
+    anom = ring & (lum > ref + 22)
+    if anom.sum() < 10:
+        return bg8
+    anom = (cv2.dilate(anom.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0) & ring
+    hm = ((anom | (core > 0)).astype(np.uint8)) * 255
+    qs = cv2.resize(sm, (max(2, hw // 2), max(2, hh // 2)), interpolation=cv2.INTER_AREA)
+    qm = cv2.resize(hm, (qs.shape[1], qs.shape[0]), interpolation=cv2.INTER_NEAREST)
+    fill = cv2.inpaint(qs, qm, 3, cv2.INPAINT_TELEA)
+    wt = np.minimum(1.0, cv2.GaussianBlur(anom.astype(np.float32), (0, 0), 1.3) * 1.5)
+    fill = cv2.GaussianBlur(cv2.resize(fill, (w, h), interpolation=cv2.INTER_LINEAR), (0, 0), 1.5)
+    wt = cv2.resize(wt, (w, h), interpolation=cv2.INTER_LINEAR)[:, :, None]
+    return np.clip(bg8 * (1 - wt) + fill * wt + 0.5, 0, 255).astype(np.uint8)
+
+
+def _composite_patch(frame, pm4, M_tot, opacity, shadow_sigma, shadow_dy, shadow_op, corners,
+                     ring_r=0):
+    H, W = frame.shape[:2]
+    mg = int(3 * shadow_sigma + shadow_dy + 3 + ring_r * 1.8 + 3)
+    xs, ys = corners[:, 0], corners[:, 1]
+    x0 = max(int(np.floor(xs.min())) - mg, 0)
+    y0 = max(int(np.floor(ys.min())) - mg, 0)
+    x1 = min(int(np.ceil(xs.max())) + mg, W)
+    y1 = min(int(np.ceil(ys.max())) + mg, H)
+    if x1 <= x0 or y1 <= y0:
+        return frame
+    Mp = M_tot.copy()
+    Mp[0, 2] -= x0
+    Mp[1, 2] -= y0
+    pw = cv2.warpAffine(pm4, Mp, (x1 - x0, y1 - y0), flags=cv2.INTER_LINEAR,
+                        borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+    a = pw[:, :, 3]
+    sh = cv2.GaussianBlur(a, (0, 0), shadow_sigma)
+    dy = int(round(shadow_dy))
+    if dy > 0:
+        sh = np.concatenate([np.zeros((dy, sh.shape[1]), np.float32), sh[:-dy]], 0)
+    out = frame.copy()
+    if ring_r > 0:
+        out[y0:y1, x0:x1] = _cleanup_patch(out[y0:y1, x0:x1], a, ring_r)
+    bg = out[y0:y1, x0:x1].astype(np.float32)
+    bg *= (1.0 - shadow_op * opacity * np.clip(sh, 0, 1))[:, :, None]
+    bg = pw[:, :, :3] * opacity + bg * (1.0 - a * opacity)[:, :, None]
+    out[y0:y1, x0:x1] = np.clip(bg + 0.5, 0, 255).astype(np.uint8)
+    return out
+
+
+def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
+                        min_conf=0.35, debug=False, cleanup=True):
+    t_start = time.time()
+    n = len(frames)
+    H, W = frames[0].shape[:2]
+    gh, gw = glasses_rgba.shape[:2]
+    fps = 24.0
+    s = 0.5
+    c0 = np.array([paste_x + gw / 2.0, paste_y + gh / 2.0])
+    R = gw / 2.0
+
+    # ---------------- tracking (half res) ----------------
+    def to_gray(f):
+        g = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
+        return cv2.resize(g, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+
+    roi, excl = _roi_polys(c0, gw, gh, face_box, (H, W))
+    g_prev = to_gray(frames[0])
+    g0 = g_prev
+    hh, ww = g0.shape
+    I = np.array([[1, 0, 0], [0, 1, 0]], np.float64)
+    mask0 = _make_mask(I, roi, excl, (hh, ww), s)
+    sharp0 = _sharp(g0, mask0)
+    anchor_pts = _detect(g0, mask0, 200)
+    p0 = anchor_pts.copy()          # frame-0 coords of live tracks (half res)
+    p_prev = anchor_pts.copy()      # their positions in previous frame
+    Ms_full = [I.copy()]            # frame0 -> frame i, full-res coords (raw)
+    Ms_half = I.copy()
+    conf = np.zeros(n)
+    conf[0] = 1.0
+    ninl = np.zeros(n, int)
+    reproj = np.zeros(n)
+    ANCHOR_EVERY = 8
+    last_good_i = 0
+    lost = 0 if len(p0) >= 8 else 1
+
+    for i in range(1, n):
+        g = to_gray(frames[i])
+        M_h = None
+        inl_mask = None
+        n_in, ratio, err = 0, 0.0, 9.0
+        if len(p_prev) >= 4:
+            pb, ok = _lk_fb(g_prev, g, p_prev, 1.0)
+            if ok.sum() >= 4:
+                M_h, inl = _fit(p0[ok], pb[ok])
+                if M_h is not None:
+                    idx = np.where(ok)[0]
+                    keep = np.zeros(len(p0), bool)
+                    keep[idx[inl]] = True
+                    n_in = int(inl.sum())
+                    ratio = n_in / max(1, int(ok.sum()))
+                    res = np.linalg.norm(_apply(M_h, p0[ok][inl]) - pb[ok][inl], axis=1)
+                    err = float(np.median(res)) if len(res) else 9.0
+                    p0 = p0[keep]
+                    p_prev = pb[keep]
+        # periodic / recovery direct re-anchor to frame 0
+        need_anchor = (i % ANCHOR_EVERY == 0) or M_h is None or n_in < 12
+        if need_anchor and len(anchor_pts) >= 8:
+            pred = _apply(Ms_half, anchor_pts.astype(np.float64)).astype(np.float32)
+            pb2, ok2 = _lk_fb(g0, g, anchor_pts, 1.5, init=pred, wide=True)
+            # reject matches far from prediction (wrong lock)
+            ok2 &= np.linalg.norm(pb2 - pred, axis=1) < 25 * s * 2
+            if ok2.sum() >= 8:
+                M2, inl2 = _fit(anchor_pts[ok2], pb2[ok2])
+                if M2 is not None and inl2.sum() >= max(10, n_in * 0.8 if M_h is not None else 10):
+                    n2 = int(inl2.sum())
+                    r2 = n2 / int(ok2.sum())
+                    if r2 >= 0.5 or M_h is None:
+                        M_h = M2
+                        idx = np.where(ok2)[0][inl2]
+                        p0 = anchor_pts[idx].copy()
+                        p_prev = pb2[idx].copy()
+                        n_in, ratio = n2, r2
+                        res = np.linalg.norm(_apply(M2, p0) - p_prev, axis=1)
+                        err = float(np.median(res))
+        # confidence
+        if M_h is None:
+            c = 0.0
+        else:
+            A = M_h[:, :2]
+            sc = np.sqrt(abs(np.linalg.det(A)))
+            sane = 0.6 < sc < 1.8 and abs(np.arctan2(A[1, 0], A[0, 0])) < np.radians(45)
+            c_n = np.clip(n_in / 20.0, 0, 1)
+            c_r = np.clip(ratio / 0.7, 0, 1)
+            c_e = np.clip(1.0 - err / 2.5, 0, 1)
+            M_full_try = M_h.copy()
+            M_full_try[:, 2] /= s
+            m_try = _make_mask(M_full_try, roi, excl, (hh, ww), s)
+            sh_r = _sharp(g, m_try) / sharp0
+            c_s = np.clip((sh_r - 0.25) / 0.35, 0, 1)
+            c = float(c_n * c_r * c_e * c_s) if sane else 0.0
+            ninl[i], reproj[i] = n_in, err
+        conf[i] = c
+        if M_h is not None and c >= 0.15:
+            Ms_half = M_h
+            last_good_i = i
+        # keep track set healthy (only when pose is trustworthy)
+        if c >= 0.5 and len(p_prev) < 70:
+            M_full_c = Ms_half.copy()
+            M_full_c[:, 2] /= s
+            mk = _make_mask(M_full_c, roi, excl, (hh, ww), s)
+            new = _detect(g, mk, 150 - len(p_prev), p_prev)
+            if len(new):
+                Mi = _inv(Ms_half)
+                p0 = np.vstack([p0, _apply(Mi, new.astype(np.float64)).astype(np.float32)])
+                p_prev = np.vstack([p_prev, new])
+        Mf = Ms_half.copy()
+        Mf[:, 2] /= s
+        Ms_full.append(Mf)
+        g_prev = g
+        if len(p_prev) < 4 and not (len(anchor_pts) >= 8):
+            pass
+
+    # ---------------- smoothing (zero-phase One-Euro on px-equivalent params) ----------------
+    P = np.array([_params_from_M(M, c0) for M in Ms_full])
+    P[:, 3] = np.unwrap(P[:, 3])
+    Ps = _smooth_params(P, R, fps)
+    Ms = [_M_from_params(p, c0) for p in Ps]
+    raw_c = P[:, :2]
+    sm_c = Ps[:, :2]
+    d2 = np.linalg.norm(sm_c[2:] - 2 * sm_c[1:-1] + sm_c[:-2], axis=1) if n > 2 else np.zeros(1)
+    max_jitter = float(d2.max()) if len(d2) else 0.0
+
+    # ---------------- opacity (fade over ~6 frames, hysteresis) ----------------
+    opac = np.zeros(n)
+    step = 1.0 / 6.0
+    on = True
+    cur = 1.0
+    for i in range(n):
+        if on and conf[i] < min_conf:
+            on = False
+        elif (not on) and conf[i] >= min_conf + 0.1:
+            on = True
+        tgt = 1.0 if on else 0.0
+        cur = min(1.0, cur + step) if tgt >= 0.5 else max(0.0, cur - step)
+        opac[i] = cur
+
+    # ---------------- composite ----------------
+    g = glasses_rgba
+    if g.shape[2] == 3:
+        g = np.dstack([g, np.full(g.shape[:2], 255, np.uint8)])
+    a = g[:, :, 3:4].astype(np.float32) / 255.0
+    pm4 = np.concatenate([g[:, :, :3].astype(np.float32) * a, a], 2)
+    corners0 = np.array([[paste_x, paste_y], [paste_x + gw, paste_y],
+                         [paste_x + gw, paste_y + gh], [paste_x, paste_y + gh]], np.float64)
+    shadow_sigma = max(1.5, 0.025 * gw)
+    shadow_dy = max(1.0, 0.012 * gw)
+    out = []
+    for i in range(n):
+        if opac[i] <= 0.004:
+            out.append(frames[i])
+            continue
+        T = np.array(Ms[i])
+        M_tot = np.hstack([T[:, :2], (T[:, :2] @ np.array([paste_x, paste_y]) + T[:, 2])[:, None]])
+        corners = _apply(T, corners0)
+        fr = _composite_patch(frames[i], pm4, M_tot, float(opac[i]), shadow_sigma,
+                              shadow_dy, 0.25, corners,
+                              ring_r=(0.12 * gw * float(np.sqrt(abs(np.linalg.det(T[:, :2]))))) if cleanup else 0)
+        if debug:
+            cv2.polylines(fr, [corners.astype(np.int32)], True, (0, 255, 0), 1)
+            cv2.putText(fr, "c=%.2f o=%.2f" % (conf[i], opac[i]), (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        out.append(fr)
+
+    el = time.time() - t_start
+    stats = {
+        "mean_conf": float(conf.mean()),
+        "frames_overlaid": int((opac > 0.5).sum()),
+        "frames_faded": int((opac < 0.999).sum()),
+        "max_jitter_px": max_jitter,
+        "ms_per_frame": 1000.0 * el / n,
+        "conf": conf, "opacity": opac, "inliers": ninl, "reproj_err": reproj,
+        "transforms": Ms, "transforms_raw": Ms_full,
+    }
+    return out, stats
+"""
+
 STAGE_3A_CODE = r"""
 import os, re, json, gc, urllib.request, urllib.parse, cv2, torch
 import numpy as np
@@ -2965,7 +3370,7 @@ cells = [
             "# ==============================================================================\n",
             "# 子程序腳本 3A：純 OpenCV 零記憶體去背 + 中英導演提示詞自動翻譯 + RealVisXL 真人模特兒生成 + 100% 原始眼鏡配戴合成\n",
             "# ==============================================================================\n",
-        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
+        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("track_code", TRACK_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
             "\n",
             "# ==============================================================================\n",
             "# 子程序腳本 3B：獨立文字編碼器 (T4 原生 FP16 加速，算完即釋放 9.5GB T5 記憶體！)\n",
@@ -2978,6 +3383,7 @@ cells = [
         ] + embed_stage("stage_3c_code", STAGE_3C_CODE) + [
             "\n",
             "Path(\"/content/temp/shot_plan.py\").write_text(shot_plan_code, encoding=\"utf-8\")\n",
+            "Path(\"/content/temp/espner_track.py\").write_text(track_code, encoding=\"utf-8\")\n",
             "import glob as _glob\n",
             "for _old in _glob.glob(\"/content/temp/keyframe_shot*.png\") + _glob.glob(\"/content/temp/glasses_shot*.png\") + _glob.glob(\"/content/temp/raw_shot*.mp4\") + [\"/content/temp/glasses_meta.json\"] + [\"/content/temp/stage3c_status.json\", \"/content/temp/prompt_embeds.pt\"]:\n",
             "    if os.path.exists(_old):\n",
@@ -3026,7 +3432,7 @@ cells = [
             "    with open(_st_p, \"r\", encoding=\"utf-8\") as _f:\n",
             "        _st = json.load(_f)\n",
             "    if _st.get(\"ai_ok\"):\n",
-            "        _m = \"\\n   \".join(f\"第{x['shot']}鏡：動態 {x['motion']}｜首幀相似度 {x.get('first_frame_sim', '-')}｜連續性 {x.get('continuity', '-')}\" for x in _st.get(\"shots\", []))\n",
+            "        _m = \"\\n   \".join(f\"第{x['shot']}鏡：動態 {x['motion']}｜首幀相似度 {x.get('first_frame_sim', '-')}｜連續性 {x.get('continuity', '-')}｜真實眼鏡追蹤信心 {x.get('glasses_conf', '-')}\" for x in _st.get(\"shots\", []))\n",
             "        print(f\"\\n✅ AI 動態影片完成｜引擎：{_st.get('engine')}\\n   {_m}\")\n",
             "        print(\"   (motion ≥ 3 代表人物/鏡頭有明顯動作；低於 3 時已自動重試並疊加推軌運鏡)\")\n",
             "    else:\n",
