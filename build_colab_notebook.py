@@ -973,6 +973,22 @@ from shot_plan import resolve_shots, output_size
 SHOTS = resolve_shots(cfg, cfg.get("custom_scene_prompt_en", cfg.get("custom_scene_prompt", "")))
 OUT_W, OUT_H = output_size(cfg)
 LANDSCAPE = OUT_W > OUT_H
+def free_ram():
+    # 釋放 Python 物件並把 glibc 堆積還給作業系統 (實測可回收 ~2.7GB)
+    gc.collect()
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+def peak_ram_gb():
+    try:
+        import resource
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1048576.0
+    except Exception:
+        return 0.0
+
 LTX_CHILD = os.environ.get("ESPNER_LTX_REPO", "")
 CHILD_STATUS = "/content/temp/stage3c_child_status.json"
 
@@ -1339,7 +1355,7 @@ try:
             torch.cuda.empty_cache()
 
     elif "LTX-Video" in gen_mode:
-        from diffusers import LTXImageToVideoPipeline, AutoencoderKLLTXVideo
+        from diffusers import LTXImageToVideoPipeline, AutoencoderKLLTXVideo, LTXVideoTransformer3DModel
         embeds = torch.load("/content/temp/prompt_embeds.pt", map_location="cpu", weights_only=False) if LTX_CHILD else {}
         # 0.9.5 的圖生影片動態遠優於 0.9.0；兩者共用同一個 T5，若 0.9.5 失敗自動退回 0.9.0
         LTX_REPOS = ["Lightricks/LTX-Video-0.9.5", "Lightricks/LTX-Video"]
@@ -1353,14 +1369,18 @@ try:
 
         def run_ltx(repo):
             print(f"[3C] 正在載入無文字編碼器版 {repo} (text_encoder=None, dtype={infer_dtype}，約 ~5GB RAM)...")
-            # 轉換器 fp16 + CPU offload；VAE 另外以 float32 常駐 GPU (~1.7GB)，避免 fp16 解碼產生負片/亂碼
-            pipe = LTXImageToVideoPipeline.from_pretrained(
-                repo, text_encoder=None, tokenizer=None, vae=None,
-                torch_dtype=infer_dtype, low_cpu_mem_usage=True
-            )
-            pipe.enable_model_cpu_offload()
+            # 系統 RAM 只有 12.7GB：先載 VAE(fp32) 並立刻搬上 GPU，再把轉換器(fp16) 直接逐片載入 GPU (device_map)。
+            # 2B 轉換器 3.9GB + VAE 2.5GB ≈ 6.4GB VRAM，T4 15GB 放得下，因此不需 CPU offload，系統 RAM 峰值大幅下降。
             vae32 = AutoencoderKLLTXVideo.from_pretrained(repo, subfolder="vae", torch_dtype=torch.float32, low_cpu_mem_usage=True).to("cuda")
             vae32.enable_tiling()
+            free_ram()
+            tr = LTXVideoTransformer3DModel.from_pretrained(repo, subfolder="transformer", torch_dtype=infer_dtype, low_cpu_mem_usage=True, device_map="cuda")
+            free_ram()
+            pipe = LTXImageToVideoPipeline.from_pretrained(
+                repo, transformer=tr, text_encoder=None, tokenizer=None, vae=None, torch_dtype=infer_dtype
+            )
+            free_ram()
+            print(f"     模型載入完成｜系統 RAM 峰值 {peak_ram_gb():.1f} GB")
             for idx, kf, pe, pam, npe, npam, out_p in shots:
                 best = None
                 # 第 1 次 CRF 30；若畫面幾乎靜止，換種子並加重壓縮 (CRF 40) 重試一次
