@@ -111,15 +111,16 @@ STYLE_PLANS = {
         "subject": "a young East Asian woman with a sleek black bob haircut with bangs, natural makeup, wearing a white linen shirt",
         "look": "warm golden hour light, soft film look, natural skin texture, 35mm photo, photorealistic",
         "endcard": "split", "endcard_dur": 6.0, "brand_mark": "top-left", "mood": "warm", "grade": "A_warm_film",
+        "copy_default": ["你有多久，/沒好好看看世界？", "今天，/為自己出發。", "把目光，/還給世界。"],
         "shots": [
             {"framing": "Medium shot", "scene": "sitting at an old wooden desk beside a large sunlit window in a cozy creative studio apartment, city rooftops outside the window", "wear": False, "closeup": False, "dur": 6.0, "copy": 0,
-             "motion": "She gazes out of the window, takes a slow breath, then closes the laptop and stands up, warm sunlight flickers through the window, the camera slowly dollies in, cinematic."},
+             "motion": "She sits calmly by the window and slowly turns her head toward the soft sunlight, a gentle breath, strands of hair move slightly, warm light flickers softly through the window, the camera slowly and smoothly dollies in, subtle natural motion, stable framing, cinematic."},
             {"framing": "Medium shot", "scene": "standing in a quiet old alley beside a weathered white wall with dappled tree-leaf shadows, warm afternoon sun", "wear": True, "closeup": False, "dur": 6.0, "copy": 1,
-             "motion": "She walks slowly along the wall toward the camera, leaf shadows drift across her face and the lenses, she smiles softly, the camera tracks backward smoothly, cinematic."},
+             "motion": "She stands relaxed by the sunlit wall facing the camera and smiles softly, dappled leaf shadows drift slowly across her face and the lenses, hair moves gently in the breeze, the camera slowly pushes in, subtle natural motion, stable framing, cinematic."},
             {"framing": "Close-up portrait", "scene": "beside a weathered white wall with dappled leaf shadows, warm afternoon sun", "wear": True, "closeup": True, "dur": 6.0, "copy": None,
-             "motion": "Close-up: she turns her face toward the camera and smiles, leaf shadows move across her face, a light breeze moves her hair, the camera pushes in slowly, cinematic."},
+             "motion": "Close-up: she faces the camera with a calm confident expression and a slight smile, soft leaf shadows glide across her face, a light breeze moves a few strands of hair, the camera pushes in very slowly, subtle natural motion, stable framing, cinematic."},
             {"framing": "Medium shot", "scene": "standing on a grassy seaside path at sunset, calm sea and low setting sun behind her", "wear": True, "closeup": False, "dur": 6.0, "copy": 2,
-             "motion": "She turns and walks slowly along the coast, then looks toward the sunset, hair moving in the sea breeze, warm backlight, the camera tracks alongside, cinematic."},
+             "motion": "She stands on the seaside path facing the camera, the sea breeze moves her hair and shirt gently, warm sunset backlight shimmers on the water behind her, the camera slowly arcs to the side, subtle natural motion, stable framing, cinematic."},
         ],
     },
     "B_COASTAL_30S": {
@@ -128,13 +129,13 @@ STYLE_PLANS = {
         "endcard": "studio", "endcard_dur": 10.0, "brand_mark": "top-center", "mood": "airy", "grade": "B_bright_natural",
         "shots": [
             {"framing": "Extreme close-up portrait", "scene": "on a sunny Mediterranean coastal cliff, deep blue sea and clear sky behind", "wear": True, "closeup": True, "dur": 5.0, "copy": None,
-             "motion": "Extreme close-up: he slowly turns his face toward the camera, the mirrored lenses reflect the sea and sky, a gentle breeze moves his hair, the camera slowly pulls back, cinematic."},
+             "motion": "Extreme close-up: he faces the camera with a calm confident look, the mirrored lenses reflect the sea and sky, a gentle breeze moves his hair slightly, the camera slowly pulls back, subtle natural motion, stable framing, cinematic."},
             {"framing": "Medium shot", "scene": "standing on a sunlit limestone coastal terrace, bright blue sea and horizon behind", "wear": True, "closeup": False, "dur": 5.0, "copy": None,
-             "motion": "He stands relaxed, then turns his head to look over the sea, the linen shirt moves in the wind, bright sunlight, the camera slowly orbits around him, cinematic."},
+             "motion": "He stands relaxed facing the camera on the sunlit terrace, the linen shirt ripples gently in the wind, sparkling sea behind him, the camera slowly orbits a little to the side, subtle natural motion, stable framing, cinematic."},
             {"framing": "Medium-wide shot", "scene": "on a sunlit limestone coastal path, bright blue sea behind", "wear": True, "closeup": False, "dur": 5.0, "copy": None,
-             "motion": "He walks along the coastal path, the shirt moves in the wind, he glances toward the sea, the camera tracks alongside smoothly, cinematic."},
+             "motion": "He stands on the coastal path facing the camera, the shirt moves gently in the wind, waves roll softly behind him, the camera slowly dollies in, subtle natural motion, stable framing, cinematic."},
             {"framing": "Close-up portrait", "scene": "on a sunny Mediterranean coast, bright sea behind", "wear": True, "closeup": True, "dur": 5.0, "copy": None,
-             "motion": "Hero shot: he turns to face the camera with a confident look, the mirrored lenses reflect the bright sea, the camera pushes in slowly, cinematic."},
+             "motion": "Hero shot: he looks into the camera with a confident look, the mirrored lenses reflect the bright sea, a light breeze moves his hair, the camera pushes in slowly, subtle natural motion, stable framing, cinematic."},
         ],
     },
 }
@@ -397,6 +398,7 @@ def harmonize_eyewear(portrait_pil, glasses_rgba, paste_x, paste_y):
     return Image.fromarray(res, "RGBA")
 
 FACE_BOXES = {}
+GLASSES_META = {}
 
 def composite_eyewear_on_model(portrait_pil, prod_rgba, is_closeup=False, shot_key="1"):
     w, h = portrait_pil.size
@@ -433,6 +435,9 @@ def composite_eyewear_on_model(portrait_pil, prod_rgba, is_closeup=False, shot_k
     paste_x = face_cx - gw // 2
     paste_y = eye_y - int(gh * 0.48)
     glasses_resized = harmonize_eyewear(portrait_pil, glasses_resized, paste_x, paste_y)
+    # 保存真實眼鏡圖與位置：3C 會在 AI 影片每一格依頭部運動重新貼回真品 (避免 AI 把眼鏡畫變形)
+    glasses_resized.save(f"/content/temp/glasses_shot{shot_key}.png")
+    GLASSES_META[shot_key] = {"x": int(paste_x), "y": int(paste_y), "src_w": int(w), "src_h": int(h)}
     g_np = np.array(glasses_resized)
     g_alpha = g_np[:, :, 3].astype(np.float32) / 255.0
     shadow_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -470,6 +475,8 @@ for sh in SHOTS:
     print(f"  ✓ 第 {sid}/{len(SHOTS)} 鏡首幀完成 ({'配戴真實眼鏡' if sh['wear'] else '未配戴'})")
 with open("/content/temp/face_boxes.json", "w", encoding="utf-8") as f:
     json.dump(FACE_BOXES, f)
+with open("/content/temp/glasses_meta.json", "w", encoding="utf-8") as f:
+    json.dump(GLASSES_META, f)
 print("[3A] 真人模特兒配戴首幀合成完成！子程序即將退出並釋放 100% 記憶體...")
 """
 
@@ -501,7 +508,7 @@ def check_embeds(*ts):
         if not torch.isfinite(t).all():
             raise RuntimeError("[3B] 文字特徵含 NaN/Inf (FP16 溢位)，請改選方案 1C (SVD-XT) 或方案 2。")
 
-neg_video = "static image, frozen frame, no motion, still photo, deformed sunglasses, melting frame, morphing lenses, extra glasses, warped logo, distorted face, on-screen text, subtitles, watermark, blurry, flickering, jerky camera"
+neg_video = "frozen frame, still photo, fast motion, sudden movement, walking, running, morphing, melting face, distorted face, deformed sunglasses, melting frame, morphing lenses, extra glasses, warped logo, motion blur, ghosting, double exposure, on-screen text, subtitles, watermark, blurry, flickering, jerky camera"
 
 if "Wan2.2" in gen_mode:
     print("[3B] 正在單獨載入 Wan2.2 文字編碼器至 T4 GPU (避免與影片網路同時佔用系統 RAM)...")
@@ -791,9 +798,13 @@ def finalize_ai_clip(frames, out_p, add_camera_move=False, shot_idx=1, dur=8.0, 
         vw.write(cv2.cvtColor(_to_u8(f), cv2.COLOR_RGB2BGR))
     vw.release()
     pts = dur / (len(frames) / float(src_fps))
+    if src_fps == 24 and pts <= 1.02:
+        vf = f"scale={OUT_W}:{OUT_H}:flags=lanczos,tpad=stop_mode=clone:stop_duration=1"   # 原生長度：不補幀
+    else:
+        vf = f"setpts={pts:.4f}*PTS,minterpolate=fps=24:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1,scale={OUT_W}:{OUT_H}:flags=lanczos,tpad=stop_mode=clone:stop_duration=1"
     subprocess.run([
         "ffmpeg", "-y", "-loglevel", "error", "-i", tmp_raw,
-        "-vf", f"setpts={pts:.4f}*PTS,minterpolate=fps=24:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1,scale={OUT_W}:{OUT_H}:flags=lanczos,tpad=stop_mode=clone:stop_duration=1",
+        "-vf", vf,
         "-frames:v", str(int(round(dur * 24))), "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", tmp_interp
     ], check=True)
     if not add_camera_move:
@@ -875,7 +886,12 @@ try:
         embeds = torch.load("/content/temp/prompt_embeds.pt", map_location="cpu", weights_only=False)
         # 0.9.5 的圖生影片動態遠優於 0.9.0；兩者共用同一個 T5，若 0.9.5 失敗自動退回 0.9.0
         LTX_REPOS = ["Lightricks/LTX-Video-0.9.5", "Lightricks/LTX-Video"]
-        LTX_W, LTX_H, LTX_F, LTX_STEPS = (832, 480, 97, 30) if LANDSCAPE else (480, 832, 97, 30)
+        LTX_W, LTX_H, LTX_STEPS = (832, 480, 30) if LANDSCAPE else (480, 832, 30)
+
+        def ltx_frames_for(dur):
+            # 直接生成整段長度 (8k+1 格)，不靠補幀拉長 → 避免殘影；上限 145 格 (6 秒) 以控制 T4 時間
+            n = int(round(dur * 24))
+            return min(145, ((n - 1 + 7) // 8) * 8 + 1)
         shots = [(sid, KFS[sid], embeds[sid]["pe"], embeds[sid]["pam"], embeds[sid]["npe"], embeds[sid]["npam"], shot_mp4(sid)) for sid in KFS]
 
         def run_ltx(repo):
@@ -893,6 +909,7 @@ try:
                 # 第 1 次 CRF 30；若畫面幾乎靜止，換種子並加重壓縮 (CRF 40) 重試一次
                 for attempt, crf in enumerate([30, 40]):
                     t0 = time.time()
+                    LTX_F = ltx_frames_for(DURS[idx])
                     print(f"  -> 第 {idx}/{len(shots)} 段 LTX 動態鏡頭 ({LTX_W}x{LTX_H}, {LTX_F}f, {LTX_STEPS} steps, 首幀 CRF {crf})...")
                     kf_in = ltx_preprocess(kf.resize((LTX_W, LTX_H), Image.Resampling.LANCZOS), crf)
                     frames = ltx_generate(pipe, vae32, kf_in, LTX_W, LTX_H, LTX_F, LTX_STEPS,
@@ -2568,7 +2585,11 @@ def iter_reference_timeline():
     plan = STYLE_PLANS[style_key]
     shots = resolve_shots(cfg, cfg.get("custom_scene_prompt_en", ""))
     W, H = output_size(cfg)
-    copies = cfg.get("copy", [])
+    copies = [c for c in (cfg.get("copy") or [])]
+    if not any(copies):
+        copies = list(plan.get("copy_default", []))
+        if copies:
+            print("ℹ️ 步驟 2 的文案是空的，改用預設文案")
     lut = G.build_lut(plan["grade"])
     mark = T.render_brand_mark_layer(W, H, position=plan["brand_mark"])
     prev_last = None
@@ -2581,6 +2602,7 @@ def iter_reference_timeline():
         ci = sh.get("copy")
         if ci is not None and ci < len(copies) and copies[ci]:
             lines = [x for x in copies[ci].split("/") if x.strip()]
+            print(f"  ✍️ 第 {sh['id']} 鏡文案：{' '.join(lines)}")
             layer = T.render_copy_layer(W, H, lines, brand_mark=False, align="left")
             if T.text_color_for(G.grade_frame(frames[len(frames) // 2], plan["grade"], lut=lut, strength=0.5), layer) == "light":
                 layer = T.render_copy_layer(W, H, lines, brand_mark=False, align="left", color="light")
@@ -2904,7 +2926,7 @@ cells = [
             "\n",
             "Path(\"/content/temp/shot_plan.py\").write_text(shot_plan_code, encoding=\"utf-8\")\n",
             "import glob as _glob\n",
-            "for _old in _glob.glob(\"/content/temp/keyframe_shot*.png\") + _glob.glob(\"/content/temp/raw_shot*.mp4\") + [\"/content/temp/stage3c_status.json\", \"/content/temp/prompt_embeds.pt\"]:\n",
+            "for _old in _glob.glob(\"/content/temp/keyframe_shot*.png\") + _glob.glob(\"/content/temp/glasses_shot*.png\") + _glob.glob(\"/content/temp/raw_shot*.mp4\") + [\"/content/temp/glasses_meta.json\"] + [\"/content/temp/stage3c_status.json\", \"/content/temp/prompt_embeds.pt\"]:\n",
             "    if os.path.exists(_old):\n",
             "        os.remove(_old)\n",
             "Path(\"/content/temp/stage_3a.py\").write_text(stage_3a_code, encoding=\"utf-8\")\n",
