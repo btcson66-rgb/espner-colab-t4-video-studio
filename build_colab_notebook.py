@@ -406,10 +406,60 @@ def _make_mask(M_full, roi, excl, shape_half, s):
 
 
 def _sharp(gray, mask):
-    lap = cv2.Laplacian(cv2.GaussianBlur(gray, (3, 3), 0), cv2.CV_16S, ksize=3)
-    v = np.abs(lap)
-    sel = mask > 0
-    return float(v[sel].mean()) + 1e-6 if sel.any() else 1e-6
+    x, y, w, h = cv2.boundingRect(mask)
+    if w < 4 or h < 4:
+        return 1e-6
+    g = gray[y:y + h, x:x + w]
+    m = mask[y:y + h, x:x + w] > 0
+    lap = cv2.Laplacian(cv2.GaussianBlur(g, (3, 3), 0), cv2.CV_16S, ksize=3)
+    return float(np.abs(lap)[m].mean()) + 1e-6 if m.any() else 1e-6
+
+
+def _scene_stats(frame, gray_half, mask_half):
+    # mean BGR colour and noise sigma (full-res px) of the face/background ring
+    x, y, w, h = cv2.boundingRect(mask_half)
+    if w < 8 or h < 8:
+        return None, None
+    m = mask_half[y:y + h, x:x + w]
+    st = 4
+    # strided sample of the colour frame (cheap; thousands of px per channel)
+    sub = frame[2 * y:2 * (y + h):2 * st, 2 * x:2 * (x + w):2 * st]
+    msub = m[::st, ::st]
+    msub = msub[:sub.shape[0], :sub.shape[1]]
+    sub = sub[:msub.shape[0], :msub.shape[1]]
+    if msub.sum() == 0:
+        return None, None
+    col = np.array(cv2.mean(sub, msub)[:3], np.float64)
+    g = gray_half[y:y + h, x:x + w]
+    res = g.astype(np.float32) - cv2.GaussianBlur(g, (0, 0), 1.0).astype(np.float32)
+    v = np.abs(res[m > 0][::5])
+    noise = float(np.median(v)) * 1.4826 * 1.2 if len(v) else 0.0
+    return col, noise
+
+
+def _smooth_series(x, alpha=0.3):
+    # x: N x D with NaN holes -> ffill/bfill, then zero-phase EMA
+    x = np.array(x, np.float64)
+    if x.ndim == 1:
+        x = x[:, None]
+    for d in range(x.shape[1]):
+        v = x[:, d]
+        ok = ~np.isnan(v)
+        if not ok.any():
+            v[:] = 0
+            continue
+        idx = np.where(ok, np.arange(len(v)), 0)
+        np.maximum.accumulate(idx, out=idx)
+        v[:] = v[idx]
+        first = np.argmax(ok)
+        v[:first] = v[first]
+    f = x.copy()
+    for i in range(1, len(f)):
+        f[i] = alpha * x[i] + (1 - alpha) * f[i - 1]
+    b = x.copy()
+    for i in range(len(b) - 2, -1, -1):
+        b[i] = alpha * x[i] + (1 - alpha) * b[i + 1]
+    return 0.5 * (f + b)
 
 
 def _fit(p0, p1, thr=2.0):
@@ -486,7 +536,7 @@ def _cleanup_patch(bg8, a_full, ring_r):
 
 
 def _composite_patch(frame, pm4, M_tot, opacity, shadow_sigma, shadow_dy, shadow_op, corners,
-                     ring_r=0):
+                     ring_r=0, blur=0.0, gain=None, grain=0.0, tile=None, rng=None):
     H, W = frame.shape[:2]
     mg = int(3 * shadow_sigma + shadow_dy + 3 + ring_r * 1.8 + 3)
     xs, ys = corners[:, 0], corners[:, 1]
@@ -501,6 +551,20 @@ def _composite_patch(frame, pm4, M_tot, opacity, shadow_sigma, shadow_dy, shadow
     Mp[1, 2] -= y0
     pw = cv2.warpAffine(pm4, Mp, (x1 - x0, y1 - y0), flags=cv2.INTER_LINEAR,
                         borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+    # match the scene: soften (premultiplied blur is fringe-free), exposure/WB gain, grain
+    if blur > 0.25:
+        pw = cv2.GaussianBlur(pw, (0, 0), float(blur))
+    if gain is not None:
+        pw[:, :, :3] *= np.asarray(gain, np.float32)[None, None, :]
+    if grain > 0.05 and tile is not None:
+        ph, pwid = pw.shape[:2]
+        th, tw = tile.shape
+        oy = int(rng.randint(0, max(1, th - ph))) if th > ph else 0
+        ox = int(rng.randint(0, max(1, tw - pwid))) if tw > pwid else 0
+        nz = tile[oy:oy + ph, ox:ox + pwid]
+        if nz.shape != (ph, pwid):
+            nz = np.resize(nz, (ph, pwid))
+        pw[:, :, :3] += (nz * float(grain))[:, :, None] * pw[:, :, 3:4]
     a = pw[:, :, 3]
     sh = cv2.GaussianBlur(a, (0, 0), shadow_sigma)
     dy = int(round(shadow_dy))
@@ -517,8 +581,11 @@ def _composite_patch(frame, pm4, M_tot, opacity, shadow_sigma, shadow_dy, shadow
 
 
 def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
-                        min_conf=0.35, debug=False, cleanup=True):
+                        min_conf=0.35, debug=False, cleanup=None, match_frame=True,
+                        glasses_free_source=False):
     t_start = time.time()
+    if cleanup is None:
+        cleanup = not glasses_free_source
     n = len(frames)
     H, W = frames[0].shape[:2]
     gh, gw = glasses_rgba.shape[:2]
@@ -539,6 +606,14 @@ def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
     I = np.array([[1, 0, 0], [0, 1, 0]], np.float64)
     mask0 = _make_mask(I, roi, excl, (hh, ww), s)
     sharp0 = _sharp(g0, mask0)
+    col0, noise0 = _scene_stats(frames[0], g0, mask0)
+    meas_r = np.full(n, np.nan)
+    meas_col = np.full((n, 3), np.nan)
+    meas_nz = np.full(n, np.nan)
+    meas_r[0] = 1.0
+    if col0 is not None:
+        meas_col[0] = col0
+        meas_nz[0] = noise0
     anchor_pts = _detect(g0, mask0, 200)
     p0 = anchor_pts.copy()          # frame-0 coords of live tracks (half res)
     p_prev = anchor_pts.copy()      # their positions in previous frame
@@ -557,6 +632,7 @@ def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
         M_h = None
         inl_mask = None
         n_in, ratio, err = 0, 0.0, 9.0
+        sh_r = None
         if len(p_prev) >= 4:
             pb, ok = _lk_fb(g_prev, g, p_prev, 1.0)
             if ok.sum() >= 4:
@@ -605,13 +681,19 @@ def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
             M_full_try[:, 2] /= s
             m_try = _make_mask(M_full_try, roi, excl, (hh, ww), s)
             sh_r = _sharp(g, m_try) / sharp0
-            c_s = np.clip((sh_r - 0.25) / 0.35, 0, 1)
+            c_s = np.clip((sh_r - 0.10) / 0.25, 0, 1)
             c = float(c_n * c_r * c_e * c_s) if sane else 0.0
             ninl[i], reproj[i] = n_in, err
         conf[i] = c
         if M_h is not None and c >= 0.15:
             Ms_half = M_h
             last_good_i = i
+            if match_frame and sh_r is not None:
+                col_i, nz_i = _scene_stats(frames[i], g, m_try)
+                if col_i is not None:
+                    meas_r[i] = sh_r
+                    meas_col[i] = col_i
+                    meas_nz[i] = nz_i
         # keep track set healthy (only when pose is trustworthy)
         if c >= 0.5 and len(p_prev) < 70:
             M_full_c = Ms_half.copy()
@@ -653,6 +735,24 @@ def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
         cur = min(1.0, cur + step) if tgt >= 0.5 else max(0.0, cur - step)
         opac[i] = cur
 
+    # ---------------- scene matching params (blur / gain / grain per frame) ----------------
+    blur_s = np.zeros(n)
+    gains = np.ones((n, 3))
+    grains = np.zeros(n)
+    if match_frame:
+        r_s = np.clip(_smooth_series(meas_r)[:, 0], 0.02, 1.0)
+        sig_half = np.sqrt(np.maximum(1.0 / r_s - 1.0, 0.0))
+        blur_s = np.minimum(2.0 * sig_half, 3.0 * W / 720.0)
+        blur_s[blur_s < 0.3] = 0.0
+        if col0 is not None:
+            cs = _smooth_series(meas_col)
+            gains = np.clip(cs / np.maximum(cs[0], 1.0), 0.7, 1.3)
+            gains[0] = 1.0
+            nz = _smooth_series(meas_nz)[:, 0]
+            grains = np.clip(0.6 * nz, 0.0, 4.0)
+    tile = np.random.RandomState(7).randn(1024, 1024).astype(np.float32) if match_frame else None
+    trng = np.random.RandomState(11)
+
     # ---------------- composite ----------------
     g = glasses_rgba
     if g.shape[2] == 3:
@@ -673,7 +773,11 @@ def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
         corners = _apply(T, corners0)
         fr = _composite_patch(frames[i], pm4, M_tot, float(opac[i]), shadow_sigma,
                               shadow_dy, 0.25, corners,
-                              ring_r=(0.12 * gw * float(np.sqrt(abs(np.linalg.det(T[:, :2]))))) if cleanup else 0)
+                              ring_r=(0.12 * gw * float(np.sqrt(abs(np.linalg.det(T[:, :2]))))) if cleanup else 0,
+                              blur=float(blur_s[i]) if match_frame else 0.0,
+                              gain=gains[i] if match_frame else None,
+                              grain=float(grains[i]) if match_frame else 0.0,
+                              tile=tile, rng=trng)
         if debug:
             cv2.polylines(fr, [corners.astype(np.int32)], True, (0, 255, 0), 1)
             cv2.putText(fr, "c=%.2f o=%.2f" % (conf[i], opac[i]), (10, 30),
@@ -689,6 +793,7 @@ def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
         "ms_per_frame": 1000.0 * el / n,
         "conf": conf, "opacity": opac, "inliers": ninl, "reproj_err": reproj,
         "transforms": Ms, "transforms_raw": Ms_full,
+        "match_blur": blur_s, "match_gain": gains, "match_grain": grains,
     }
     return out, stats
 """
@@ -2137,7 +2242,8 @@ def apply_real_glasses(sid, out_p):
     if not frames:
         return None
     out, st = TRK.recomposite_glasses(frames, g, int(round(meta["x"] * sx)), int(round(meta["y"] * sy)),
-                                      face_box=load_face_box(sid, OUT_W, OUT_H), cleanup=True)
+                                      face_box=load_face_box(sid, OUT_W, OUT_H),
+                                      glasses_free_source=os.path.exists(f"/content/temp/base_shot{sid}.png"), match_frame=True)
     cv2.setNumThreads(0)
     tmp = out_p.replace(".mp4", "_glasses.mp4")
     vw = cv2.VideoWriter(tmp, cv2.VideoWriter_fourcc(*"mp4v"), 24.0, (OUT_W, OUT_H))
