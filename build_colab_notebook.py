@@ -998,6 +998,266 @@ def select_usable(frames_bgr, target_n, ref_bgr=None, glasses_opacity=None, min_
     return out, info
 """
 
+LENS_CODE = r"""
+# espner_lens: make a real product eyewear cutout read as WORN (reflective lenses,
+# fresnel edges, specular, metal catching light) instead of a flat sticker.
+# Geometry / logo / alpha of the product are never changed (identity lock): only shading.
+# Deps: numpy, opencv (cv2 4.x), Pillow.
+import cv2
+import numpy as np
+from PIL import Image
+
+
+def cutout_white_bg(photo_rgb, tol=18):
+    # near-white studio background -> alpha (flood fill from every border); lenses stay opaque
+    rgb = np.ascontiguousarray(np.asarray(photo_rgb.convert("RGB") if hasattr(photo_rgb, "convert") else photo_rgb))
+    h, w = rgb.shape[:2]
+    bg = np.zeros((h + 2, w + 2), np.uint8)
+    flags = 4 | cv2.FLOODFILL_FIXED_RANGE | cv2.FLOODFILL_MASK_ONLY | (255 << 8)
+    img = rgb.copy()
+    for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1), (w // 2, 0), (w // 2, h - 1), (0, h // 2), (w - 1, h // 2)]:
+        if bg[y + 1, x + 1] == 0:
+            cv2.floodFill(img, bg, (x, y), 0, (tol,) * 3, (tol,) * 3, flags)
+    alpha = 255 - bg[1:-1, 1:-1]
+    alpha = cv2.morphologyEx(alpha, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    alpha = cv2.GaussianBlur(alpha, (0, 0), 0.8)
+    ys, xs = np.where(alpha > 20)
+    out = np.dstack([rgb, alpha])
+    if len(xs):
+        out = out[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    return Image.fromarray(out, "RGBA")
+
+
+def _smooth01(x, a, b):
+    t = np.clip((x - a) / max(b - a, 1e-6), 0, 1)
+    return t * t * (3 - 2 * t)
+
+
+def _lens_mask_np(arr):
+    # arr: HxWx4 uint8. returns float32 0..1 (full res)
+    h0, w0 = arr.shape[:2]
+    s = min(1.0, 256.0 / w0)
+    sm = cv2.resize(arr, (max(8, int(w0 * s)), max(8, int(h0 * s))), interpolation=cv2.INTER_AREA) if s < 1 else arr
+    h, w = sm.shape[:2]
+    a = (sm[..., 3] > 127).astype(np.uint8)
+    # candidate = silhouette minus thin parts (temples, bridge, rim wires) via opening
+    k = max(3, int(0.10 * w)) | 1
+    cand = cv2.morphologyEx(a, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    if cand.sum() < 0.02 * w * h:
+        k = max(3, int(0.05 * w)) | 1
+        cand = cv2.morphologyEx(a, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    if cand.sum() == 0:
+        return np.zeros((h0, w0), np.float32)
+    dist = cv2.distanceTransform(cand, cv2.DIST_L2, 3)
+    core = dist > 0.40 * dist.max()
+    lab = cv2.cvtColor(cv2.GaussianBlur(sm[..., :3], (0, 0), max(0.8, 0.006 * w)), cv2.COLOR_RGB2LAB).astype(np.float32)
+    lab[..., 0] *= 0.6
+    cf = core.astype(np.float32)
+    sig = 0.12 * w
+    num = cv2.GaussianBlur(lab * cf[..., None], (0, 0), sig)
+    den = cv2.GaussianBlur(cf, (0, 0), sig)[..., None]
+    c_l = np.median(lab[core], axis=0)
+    field = np.where(den > 0.02, num / np.maximum(den, 1e-4), c_l)
+    band = (cand > 0) & (dist < max(2.0, 0.02 * w))
+    c_f = np.median(lab[band], axis=0) if band.any() else c_l
+    thr = float(np.clip(0.7 * np.linalg.norm(c_l - c_f), 14, 45))
+    D = np.linalg.norm(lab - field, axis=2)
+    sel = ((D < thr) & (cand > 0)).astype(np.uint8)
+    # never reach the rim: erode candidate by a minimum rim width
+    rim = max(1, int(round(0.012 * w)))
+    sel &= cv2.erode(cand, np.ones((2 * rim + 1, 2 * rim + 1), np.uint8))
+    sel = cv2.morphologyEx(sel, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    # keep components touching the core; fill holes (nose pads, logo)
+    n, lbl = cv2.connectedComponents(sel)
+    keep = np.zeros_like(sel)
+    for i in range(1, n):
+        comp = lbl == i
+        if (comp & core).any():
+            keep[comp] = 1
+    cnts, _ = cv2.findContours(keep, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    filled = np.zeros_like(keep)
+    cv2.drawContours(filled, cnts, -1, 1, -1)
+    m = cv2.resize(filled.astype(np.float32), (w0, h0), interpolation=cv2.INTER_LINEAR)
+    m = cv2.GaussianBlur(m, (0, 0), max(0.8, 0.004 * w0))
+    return np.clip(m, 0, 1).astype(np.float32)
+
+
+def lens_mask(glasses_rgba):
+    # float32 HxW 0..1: lens areas inside the rims (no frame / temples / bridge), feathered
+    return _lens_mask_np(np.asarray(glasses_rgba.convert("RGBA")))
+
+
+def _estimate_light(scene, x0, y0, x1, y1):
+    g = cv2.cvtColor(scene[y0:y1, x0:x1].astype(np.uint8), cv2.COLOR_RGB2GRAY).astype(np.float32)
+    h, w = g.shape
+    if h < 4 or w < 4:
+        return np.array([-0.5, -0.85], np.float32)
+    lx = g[:, w // 2:].mean() - g[:, :w // 2].mean()
+    ly = g[h // 2:].mean() - g[:h // 2].mean()
+    v = np.array([lx, -0.5 * ly], np.float32)
+    n = np.linalg.norm(v)
+    v = v / n * min(1.0, n / 12.0) if n > 1e-3 else np.zeros(2, np.float32)
+    v = v + np.array([-0.25, -0.9], np.float32) * 0.8   # light mostly from above
+    return v / max(np.linalg.norm(v), 1e-3)
+
+
+def _env_strip(scene, paste_x, paste_y, gw, gh):
+    H, W = scene.shape[:2]
+    ya = int(max(0, paste_y - 3.0 * gh))
+    yb = int(min(H, paste_y + 6.5 * gh))
+    xl = int(max(0, paste_x - 0.15 * gw))
+    xr = int(min(W, paste_x + 1.15 * gw))
+    parts = [p for p in (scene[ya:yb, :xl], scene[ya:yb, xr:]) if p.shape[1] > 0]
+    E = np.concatenate(parts, axis=1) if parts else scene[ya:yb]
+    if E.shape[1] < gw:
+        E = scene[ya:yb]
+    cy = (paste_y + 2.1 * gh - ya) / max(1, (yb - ya))
+    # horizon / strongest tonal step (sea vs sky, street vs buildings): put it mid-lens so the
+    # reflection has the light-above / dark-below structure of real mirror lenses
+    rows = cv2.GaussianBlur(E.mean(2).mean(1).astype(np.float32).reshape(-1, 1), (1, 0), max(1.5, 0.05 * E.shape[0])).ravel()
+    if len(rows) > 12:
+        d = rows[6:] - rows[:-6]
+        lo = int(0.25 * len(d))
+        j = lo + int(np.argmax(np.abs(d[lo:])))
+        if abs(d[j]) > 18:
+            cy = (j + 3) / float(len(rows)) - 0.04
+    return E[:, ::-1].copy(), float(np.clip(cy, 0.1, 0.9))
+
+
+def _lens_env(E, cy_frac, cx_frac, lw, lh):
+    # perspective-ish window of the environment mapped on a convex (spherical) lens
+    Eh, Ew = E.shape[:2]
+    win_w = min(float(Ew), 3.3 * lw)
+    win_h = win_w * lh / lw * 1.05
+    if win_h > Eh:
+        win_h = float(Eh)
+        win_w = min(float(Ew), win_h * lw / lh)
+    cx = float(np.clip(cx_frac * Ew, win_w / 2, Ew - win_w / 2))
+    cy = float(np.clip(cy_frac * Eh, win_h / 2, Eh - win_h / 2))
+    xs = (np.arange(lw, dtype=np.float32) + 0.5) / lw * 2 - 1
+    ys = (np.arange(lh, dtype=np.float32) + 0.5) / lh * 2 - 1
+    nx, ny = np.meshgrid(xs, ys)
+    r2 = nx * nx + ny * ny
+    bulge = 1.0 + 0.55 * r2
+    # slight vertical tilt (keystone) so the horizon curves like in a curved mirror
+    mx = (cx + nx * bulge * win_w / 2).astype(np.float32)
+    my = (cy + ny * bulge * win_h / 2 + 0.06 * win_h * nx * nx).astype(np.float32)
+    out = cv2.remap(E, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    return cv2.GaussianBlur(out, (0, 0), 1.0 + lw / 70.0)
+
+
+def render_worn_glasses(portrait_rgb, glasses_rgba, paste_x, paste_y, strength=1.0):
+    # portrait_rgb: PIL image (or HxWx3 array). Returns PIL RGBA (same size as glasses_rgba)
+    scene = np.asarray(portrait_rgb.convert("RGB") if hasattr(portrait_rgb, "convert") else portrait_rgb).astype(np.float32)
+    H, W = scene.shape[:2]
+    g = np.asarray(glasses_rgba.convert("RGBA")).astype(np.float32)
+    rgb, a = g[..., :3], g[..., 3] / 255.0
+    gh, gw = rgb.shape[:2]
+    strength = float(np.clip(strength, 0.0, 1.5))
+    lm = _lens_mask_np(g.astype(np.uint8))
+    solid = a > 0.5
+
+    # ---- 1) colour / exposure match to the local scene light (gentle, never washes out)
+    pad_x, pad_y = int(gw * 0.6), int(gh * 1.6)
+    x0, y0 = max(0, paste_x - pad_x), max(0, paste_y - pad_y)
+    x1, y1 = min(W, paste_x + gw + pad_x), min(H, paste_y + gh + pad_y)
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        x0, y0, x1, y1 = 0, 0, W, H
+    local = scene[y0:y1, x0:x1].reshape(-1, 3)
+    light = 0.6 * local.mean(0) + 0.4 * scene.reshape(-1, 3).mean(0)
+    tint = 1.0 + 0.45 * (np.clip(light / max(1e-3, light.mean()), 0.78, 1.25) - 1.0)
+    prod_l = float(rgb[solid].mean()) if solid.any() else 128.0
+    expo = float(np.clip((float(local.mean()) / max(prod_l, 1.0)) ** 0.30, 0.74, 1.04))
+    base = rgb * expo * tint
+
+    # ---- lens type from the product colours
+    lm_b = lm > 0.5
+    if lm_b.sum() > 20:
+        lens_col = np.median(rgb[lm_b], axis=0)
+    else:
+        lens_col = np.array([60.0, 60.0, 60.0])
+    V = float(lens_col.max())
+    m = float(_smooth01(np.array([V]), 60, 135)[0])          # 0 dark lens .. 1 mirror lens
+    R0 = (0.22 + 0.50 * m) * strength
+
+    out = base.copy()
+    lensf = lm[..., None]
+    light_dir = _estimate_light(scene, x0, y0, x1, y1)
+
+    # ---- 2) lens environment reflection
+    n, lbl, stats, cents = cv2.connectedComponentsWithStats((lm > 0.35).astype(np.uint8), connectivity=8)
+    comps = sorted(range(1, n), key=lambda i: -stats[i, cv2.CC_STAT_AREA])[:2]
+    comps = [i for i in comps if stats[i, cv2.CC_STAT_AREA] > 0.02 * gw * gh]
+    comps.sort(key=lambda i: cents[i][0])
+    E, cy_frac = _env_strip(scene, paste_x, paste_y, gw, gh)
+    env_full = np.zeros_like(base)
+    spec = np.zeros((gh, gw), np.float32)
+    shade = np.ones((gh, gw), np.float32)
+    Rmap = np.zeros((gh, gw), np.float32)
+    tn = lens_col / max(float(lens_col.mean()), 1.0)
+    for k, i in enumerate(comps):
+        bx, by, bw, bh = stats[i, 0], stats[i, 1], stats[i, 2], stats[i, 3]
+        cxf = 0.30 if len(comps) == 2 and k == 0 else (0.70 if len(comps) == 2 else 0.5)
+        env = _lens_env(E, cy_frac, cxf, bw, bh)
+        mean_l = float(env.mean())
+        gain = float(np.clip(105.0 / max(mean_l, 1.0), 1.0, 1.9)) if m > 0.4 else 1.0
+        # crisp-ify + contrast around the mean (mirrors are punchy)
+        env = (env - mean_l) * 1.4 + mean_l
+        env = np.clip(env * gain, 0, 255) * (0.55 + 0.45 * tn) ** 1.0 * (0.86 if m > 0.5 else 0.94)
+        env_full[by:by + bh, bx:bx + bw] = env
+        comp = (lbl[by:by + bh, bx:bx + bw] == i).astype(np.uint8)
+        d = cv2.distanceTransform(np.pad(comp, 1), cv2.DIST_L2, 3)[1:-1, 1:-1]
+        dn = np.clip(d / max(0.30 * min(bw, bh), 1.0), 0, 1)
+        fres = (1.0 - dn) ** 1.5                                   # strong near the lens edge
+        yy = np.linspace(0, 1, bh, dtype=np.float32)[:, None]
+        Rmap[by:by + bh, bx:bx + bw] = R0 * (0.80 + 0.55 * fres)
+        shade[by:by + bh, bx:bx + bw] = (0.78 + 0.22 * yy) * (0.90 + 0.10 * dn) if m < 0.5 else (0.80 + 0.20 * yy) * (0.90 + 0.10 * dn)
+
+        # ---- 3) specular: elongated soft streak + small crisp hot-spot on the light side
+        xs = (np.arange(bw, dtype=np.float32) + 0.5) / bw * 2 - 1
+        ys = (np.arange(bh, dtype=np.float32) + 0.5) / bh * 2 - 1
+        nx, ny = np.meshgrid(xs, ys)
+        px, py = light_dir[0] * 0.45, light_dir[1] * 0.5
+        ang = np.deg2rad(-32.0 if light_dir[0] <= 0 else 32.0)
+        u = (nx - px) * np.cos(ang) + (ny - py) * np.sin(ang)
+        v = -(nx - px) * np.sin(ang) + (ny - py) * np.cos(ang)
+        streak = np.exp(-(u ** 2) / (2 * 0.42 ** 2) - (v ** 2) / (2 * 0.075 ** 2))
+        streak2 = 0.35 * np.exp(-(u ** 2) / (2 * 0.40 ** 2) - ((v - 0.30) ** 2) / (2 * 0.06 ** 2))
+        hot = np.exp(-((nx - px * 1.35) ** 2 + (ny - py * 1.35) ** 2) / (2 * 0.12 ** 2))
+        spec[by:by + bh, bx:bx + bw] = np.maximum(spec[by:by + bh, bx:bx + bw], 0.55 * streak + streak2 + 0.7 * hot)
+
+    refl = np.clip(Rmap, 0, 0.92)[..., None] * lensf
+    out = out * (1 - lensf) + (out * shade[..., None]) * lensf
+    out = out * (1 - refl) + env_full * refl
+    sp = (spec * (0.55 if m > 0.5 else 0.6) * strength)[..., None] * lensf
+    wcol = np.array([255.0, 252.0, 244.0]) * 0.5 + 0.5 * np.clip(light / max(light.max(), 1) * 255.0, 180, 255)
+    out = out + (255.0 - out) * np.clip(sp, 0, 0.95) * (wcol / 255.0)
+
+    # ---- frame: metal / acetate catches the light
+    fr = (solid & (lm < 0.2)).astype(np.float32)
+    fr_soft = cv2.GaussianBlur(fr, (0, 0), max(1.0, gw / 150.0))
+    gy, gx = np.gradient(fr_soft)
+    nrm = np.sqrt(gx * gx + gy * gy) + 1e-4
+    # outward normal of the frame bar = -grad(mask); facing the light => bright
+    facing = np.clip(-(gx * light_dir[0] + gy * light_dir[1]) / nrm, 0, 1) ** 3
+    edge = np.clip(nrm / max(float(nrm.max()), 1e-4) * 1.4, 0, 1)
+    lum = base.mean(2)
+    ridge = lum - cv2.GaussianBlur(lum, (0, 0), max(2.0, gw / 40.0))
+    metal = 1.0 if float(np.median(lum[fr > 0.5])) > 90 else 0.55 if (fr > 0.5).any() else 1.0
+    fr3 = fr[..., None]
+    out = out + fr3 * (0.9 * ridge)[..., None] * strength
+    hl = (facing * edge * (0.55 if metal >= 1 else 0.45) * strength)[..., None] * fr3
+    out = out + (255.0 - out) * np.clip(hl, 0, 0.9)
+
+    # ---- 5) grain matched to portrait, softer alpha edge
+    gray = cv2.cvtColor(scene.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    sigma = float(np.clip(cv2.Laplacian(gray, cv2.CV_32F).std() / 18.0, 0.8, 3.5))
+    out = out + np.random.RandomState(7).normal(0, sigma, out.shape).astype(np.float32)
+    a2 = cv2.GaussianBlur(a.astype(np.float32), (3, 3), 0.7)
+    res = np.concatenate([np.clip(out, 0, 255), (a2 * 255.0)[..., None]], axis=2).astype(np.uint8)
+    return Image.fromarray(res, "RGBA")
+"""
+
 STAGE_3A_CODE = r"""
 import os, re, json, gc, urllib.request, urllib.parse, cv2, torch
 import numpy as np
@@ -1192,7 +1452,13 @@ def composite_eyewear_on_model(portrait_pil, prod_rgba, is_closeup=False, shot_k
     gw, gh = glasses_resized.size
     paste_x = face_cx - gw // 2
     paste_y = eye_y - int(gh * 0.48)
-    glasses_resized = harmonize_eyewear(portrait_pil, glasses_resized, paste_x, paste_y)
+    try:
+        # 真實鏡片質感：鏡面反射場景 (天空/海)、上深下淺漸層、高光、金屬框受光；外型 100% 不變
+        import espner_lens as LENS
+        glasses_resized = LENS.render_worn_glasses(portrait_pil.convert("RGB"), glasses_resized, paste_x, paste_y)
+    except Exception as _e:
+        print(f"  ℹ️ 鏡片質感模組略過 ({_e})，改用基本打光")
+        glasses_resized = harmonize_eyewear(portrait_pil, glasses_resized, paste_x, paste_y)
     # 保存真實眼鏡圖與位置：3C 會在 AI 影片每一格依頭部運動重新貼回真品 (避免 AI 把眼鏡畫變形)
     glasses_resized.save(f"/content/temp/glasses_shot{shot_key}.png")
     GLASSES_META[shot_key] = {"x": int(paste_x), "y": int(paste_y), "src_w": int(w), "src_h": int(h)}
@@ -4695,7 +4961,7 @@ cells = [
             "# ==============================================================================\n",
             "# 子程序腳本 3A：純 OpenCV 零記憶體去背 + 中英導演提示詞自動翻譯 + RealVisXL 真人模特兒生成 + 100% 原始眼鏡配戴合成\n",
             "# ==============================================================================\n",
-        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("track_code", TRACK_CODE) + embed_stage("salvage_code", SALVAGE_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
+        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("track_code", TRACK_CODE) + embed_stage("salvage_code", SALVAGE_CODE) + embed_stage("lens_code", LENS_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
             "\n",
             "# ==============================================================================\n",
             "# 子程序腳本 3B：獨立文字編碼器 (T4 原生 FP16 加速，算完即釋放 9.5GB T5 記憶體！)\n",
@@ -4710,6 +4976,7 @@ cells = [
             "Path(\"/content/temp/shot_plan.py\").write_text(shot_plan_code, encoding=\"utf-8\")\n",
             "Path(\"/content/temp/espner_track.py\").write_text(track_code, encoding=\"utf-8\")\n",
             "Path(\"/content/temp/espner_salvage.py\").write_text(salvage_code, encoding=\"utf-8\")\n",
+            "Path(\"/content/temp/espner_lens.py\").write_text(lens_code, encoding=\"utf-8\")\n",
             "import glob as _glob\n",
             "for _old in _glob.glob(\"/content/temp/keyframe_shot*.png\") + _glob.glob(\"/content/temp/glasses_shot*.png\") + _glob.glob(\"/content/temp/base_shot*.png\") + _glob.glob(\"/content/temp/raw_shot*.mp4\") + [\"/content/temp/glasses_meta.json\"] + [\"/content/temp/stage3c_status.json\", \"/content/temp/prompt_embeds.pt\"]:\n",
             "    if os.path.exists(_old):\n",
