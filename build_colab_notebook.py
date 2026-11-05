@@ -107,38 +107,71 @@ NEG_PORTRAIT = "sunglasses, glasses, eyewear, goggles, deformed face, asymmetric
 # ---- 參考片標準 30 秒分鏡 (4 鏡 + 片尾) ----
 # wear=True 的鏡頭：肖像需正面面向鏡頭，才能精準合成真實眼鏡；動作在影片階段才發生
 STYLE_PLANS = {
+    # ★ 品牌核准格式 (依雲端「廣告」資料夾內已審核 MADRID / CELEBRITY v4 逐格量測)：
+    #   故事 14.5s (大特寫→拉遠→中景→3/4→微風→推近) + 米色金框卡 2.46s + 近白片尾 4.04s = 21.0s
+    "H_HOUSE_21S": {
+        "subject": "{talent}",
+        "look": "natural bright daylight, shallow depth of field, soft natural film look, sharp focus, luxury eyewear campaign, photorealistic",
+        "endcard": "house", "endcard_dur": 6.5, "brand_mark": None, "mood": "warm", "grade": "A_warm_film", "grade_strength": 0.25,
+        "shots": [
+            {"framing": "Extreme close-up portrait, the face filling the frame", "scene": "{location}", "wear": True, "closeup": True, "dur": 2.5, "copy": None,
+             "motion": "Extreme close-up: the model looks calmly into the camera, the mirrored lenses reflect the surroundings, the camera slowly pulls back, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Close-up portrait", "scene": "{location}", "wear": True, "closeup": True, "dur": 2.0, "copy": None,
+             "motion": "Close-up: the model faces the camera with a calm confident expression, a light breeze moves the hair, the camera keeps pulling back slowly, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Medium shot from the waist up, facing the camera", "scene": "{location}", "wear": True, "closeup": False, "dur": 2.5, "copy": None,
+             "motion": "The model stands relaxed facing the camera, clothes move gently in the breeze, the camera slowly pulls back, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Medium shot, three-quarter view toward the camera", "scene": "{location}", "wear": True, "closeup": False, "dur": 2.5, "copy": None,
+             "motion": "The model stands in a relaxed three-quarter pose and slowly turns the face toward the camera, the camera tracks sideways smoothly, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Medium shot, facing the camera", "scene": "{location}", "wear": True, "closeup": False, "dur": 2.5, "copy": None,
+             "motion": "The model stands facing the camera, the breeze moves the hair and clothes, sunlight glints on the lenses, the camera slowly orbits a little, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Medium close-up portrait, facing the camera", "scene": "{location}", "wear": True, "closeup": True, "dur": 2.5, "copy": None,
+             "motion": "Hero shot: the model looks into the camera with a confident subtle smile, the lenses reflect the bright surroundings, the camera pushes in slowly, subtle natural motion, stable framing, cinematic."},
+        ],
+    },
     "A_STORY_30S": {
         "subject": "a young East Asian woman with a sleek black bob haircut with bangs, natural makeup, wearing a white linen shirt",
-        "look": "warm golden hour light, soft film look, natural skin texture, 35mm photo, photorealistic",
+        "look": "warm golden hour light, soft film look, natural skin texture, sharp focus, 35mm photo, photorealistic",
         "endcard": "split", "endcard_dur": 6.0, "brand_mark": "top-left", "mood": "warm", "grade": "A_warm_film",
         "copy_default": ["你有多久，/沒好好看看世界？", "今天，/為自己出發。", "把目光，/還給世界。"],
+        # 8 鏡 x 3 秒：短鏡頭停在模型品質最好的區段，也符合參考片 A 每 2~5 秒一刀的剪輯節奏
         "shots": [
-            {"framing": "Medium shot", "scene": "sitting at an old wooden desk beside a large sunlit window in a cozy creative studio apartment, city rooftops outside the window", "wear": False, "closeup": False, "dur": 6.0, "copy": 0,
-             "motion": "She sits calmly by the window and slowly turns her head toward the soft sunlight, a gentle breath, strands of hair move slightly, warm light flickers softly through the window, the camera slowly and smoothly dollies in, subtle natural motion, stable framing, cinematic."},
-            {"framing": "Medium shot", "scene": "standing in a quiet old alley beside a weathered white wall with dappled tree-leaf shadows, warm afternoon sun", "wear": True, "closeup": False, "dur": 6.0, "copy": 1,
-             "motion": "She stands relaxed by the sunlit wall facing the camera and smiles softly, dappled leaf shadows drift slowly across her face and the lenses, hair moves gently in the breeze, the camera slowly pushes in, subtle natural motion, stable framing, cinematic."},
-            {"framing": "Close-up portrait", "scene": "beside a weathered white wall with dappled leaf shadows, warm afternoon sun", "wear": True, "closeup": True, "dur": 6.0, "copy": None,
-             "motion": "Close-up: she faces the camera with a calm confident expression and a slight smile, soft leaf shadows glide across her face, a light breeze moves a few strands of hair, the camera pushes in very slowly, subtle natural motion, stable framing, cinematic."},
-            {"framing": "Medium shot", "scene": "standing on a grassy seaside path at sunset, calm sea and low setting sun behind her", "wear": True, "closeup": False, "dur": 6.0, "copy": 2,
-             "motion": "She stands on the seaside path facing the camera, the sea breeze moves her hair and shirt gently, warm sunset backlight shimmers on the water behind her, the camera slowly arcs to the side, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Medium shot", "scene": "sitting at an old wooden desk beside a large sunlit window in a cozy creative studio apartment, city rooftops outside the window", "wear": False, "closeup": False, "dur": 3.0, "copy": 0,
+             "motion": "She sits calmly at the desk and slowly turns her head toward the window light, warm sunlight flickers softly, the camera slowly dollies in, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Close-up portrait", "scene": "beside a sunlit window, warm soft window light on her face, blurred city outside", "wear": False, "closeup": True, "dur": 3.0, "copy": None,
+             "motion": "Close-up: she slowly closes and opens her eyes, a gentle breath, warm window light shimmers softly on her face, the camera stays still with a very slow push-in, subtle natural motion, cinematic."},
+            {"framing": "Medium shot", "scene": "standing in a quiet old alley beside a weathered white wall, warm afternoon sun, green plants", "wear": True, "closeup": False, "dur": 3.0, "copy": 1,
+             "motion": "She stands relaxed by the sunlit wall facing the camera and smiles softly, hair moves gently in the breeze, the camera slowly pushes in, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Close-up portrait", "scene": "beside a weathered white wall in warm afternoon sun", "wear": True, "closeup": True, "dur": 3.0, "copy": None,
+             "motion": "Close-up: she faces the camera with a calm confident expression and a slight smile, a few strands of hair move in the breeze, the camera pushes in very slowly, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Medium shot from the waist up", "scene": "in a quiet sunlit old alley with green plants and a white wall", "wear": True, "closeup": False, "dur": 3.0, "copy": None,
+             "motion": "She stands in the sunlit alley facing the camera, her shirt and hair move gently in the breeze, warm sunlight, the camera slowly arcs to the side, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Medium shot", "scene": "standing on a grassy seaside path at golden sunset, calm sea and low sun behind her", "wear": True, "closeup": False, "dur": 3.0, "copy": None,
+             "motion": "She stands on the seaside path facing the camera, the sea breeze moves her hair and shirt gently, warm sunset backlight shimmers on the water, the camera slowly dollies in, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Close-up portrait", "scene": "at the seaside during golden sunset, warm backlight, calm sea behind", "wear": True, "closeup": True, "dur": 3.0, "copy": 2,
+             "motion": "Close-up: she looks into the camera with a peaceful expression, warm sunset rim light on her hair, hair moves slightly in the sea breeze, the camera pushes in very slowly, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Medium shot", "scene": "on a grassy seaside path at golden sunset, calm sea behind", "wear": True, "closeup": False, "dur": 3.0, "copy": None,
+             "motion": "She stands facing the camera at sunset with a soft smile, hair and shirt flutter gently in the sea breeze, the camera slowly pulls back, subtle natural motion, stable framing, cinematic."},
         ],
     },
     "B_COASTAL_30S": {
         "subject": "a handsome Mediterranean man in his thirties with short dark hair and light stubble, wearing a cream white linen shirt",
-        "look": "bright natural midday sunlight, crisp clean colors, luxury fashion campaign, photorealistic",
+        "look": "bright natural midday sunlight, crisp clean colors, sharp focus, luxury fashion campaign, photorealistic",
         "endcard": "studio", "endcard_dur": 10.0, "brand_mark": "top-center", "mood": "airy", "grade": "B_bright_natural",
         "shots": [
-            {"framing": "Extreme close-up portrait", "scene": "on a sunny Mediterranean coastal cliff, deep blue sea and clear sky behind", "wear": True, "closeup": True, "dur": 5.0, "copy": None,
+            {"framing": "Extreme close-up portrait", "scene": "on a sunny Mediterranean coastal cliff, deep blue sea and clear sky behind", "wear": True, "closeup": True, "dur": 3.0, "copy": None,
              "motion": "Extreme close-up: he faces the camera with a calm confident look, the mirrored lenses reflect the sea and sky, a gentle breeze moves his hair slightly, the camera slowly pulls back, subtle natural motion, stable framing, cinematic."},
-            {"framing": "Medium shot", "scene": "standing on a sunlit limestone coastal terrace, bright blue sea and horizon behind", "wear": True, "closeup": False, "dur": 5.0, "copy": None,
+            {"framing": "Medium shot", "scene": "standing on a sunlit limestone coastal terrace, bright blue sea and horizon behind", "wear": True, "closeup": False, "dur": 4.0, "copy": None,
              "motion": "He stands relaxed facing the camera on the sunlit terrace, the linen shirt ripples gently in the wind, sparkling sea behind him, the camera slowly orbits a little to the side, subtle natural motion, stable framing, cinematic."},
-            {"framing": "Medium-wide shot", "scene": "on a sunlit limestone coastal path, bright blue sea behind", "wear": True, "closeup": False, "dur": 5.0, "copy": None,
+            {"framing": "Medium shot from the waist up", "scene": "on a sunlit limestone coastal path, bright blue sea behind", "wear": True, "closeup": False, "dur": 3.0, "copy": None,
              "motion": "He stands on the coastal path facing the camera, the shirt moves gently in the wind, waves roll softly behind him, the camera slowly dollies in, subtle natural motion, stable framing, cinematic."},
-            {"framing": "Close-up portrait", "scene": "on a sunny Mediterranean coast, bright sea behind", "wear": True, "closeup": True, "dur": 5.0, "copy": None,
-             "motion": "Hero shot: he looks into the camera with a confident look, the mirrored lenses reflect the bright sea, a light breeze moves his hair, the camera pushes in slowly, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Close-up portrait", "scene": "on a sunny Mediterranean coast, bright sea behind", "wear": True, "closeup": True, "dur": 3.0, "copy": None,
+             "motion": "Close-up: he looks into the camera with a confident look, the mirrored lenses reflect the bright sea, a light breeze moves his hair, the camera pushes in slowly, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Medium shot", "scene": "leaning on a white stone railing above the Mediterranean sea in bright sun", "wear": True, "closeup": False, "dur": 4.0, "copy": None,
+             "motion": "He leans relaxed on the stone railing facing the camera, the shirt moves in the sea wind, bright sunlight glints on the sea, the camera slowly arcs around him, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Close-up portrait", "scene": "on a sunny coastal cliff, deep blue sea and sky behind", "wear": True, "closeup": True, "dur": 3.0, "copy": None,
+             "motion": "Hero shot: he gives a subtle confident smile into the camera, the mirrored lenses reflect the bright sea, the camera pushes in slowly, subtle natural motion, stable framing, cinematic."},
         ],
-    },
-}
+    },}
 
 PORTRAIT_PROMPTS = {
     "0_CLASSIC_MADRID": (
@@ -197,6 +230,12 @@ MOTION_PROMPTS = {
 }
 
 
+TALENTS = {
+    "auto": "a stylish model in their thirties with natural styling, wearing a light linen shirt",
+    "female": "an elegant young woman with natural makeup and softly styled hair, wearing a light linen shirt",
+    "male": "a handsome man in his thirties with short dark hair and light stubble, wearing a light linen shirt",
+}
+
 def is_reference_style(style_key):
     return style_key in STYLE_PLANS
 
@@ -210,9 +249,15 @@ def resolve_shots(cfg, custom_en=""):
     custom_en = (custom_en or "").strip()
     shots = []
     if style_key in STYLE_PLANS:
-        plan = STYLE_PLANS[style_key]
+        plan = dict(STYLE_PLANS[style_key])
+        snow = "SNOW" in cfg.get("product_category", "")
+        talent = TALENTS.get(cfg.get("talent", "auto"), TALENTS["auto"])
+        if snow:
+            talent = talent.replace("a light linen shirt", "a sleek technical ski jacket")
+        location = "at a sunny snowy mountain ski resort, crisp alpine peaks behind" if snow else "on a sunlit Mediterranean coastal promenade, sparkling sea behind"
+        plan["subject"] = plan["subject"].format(talent=talent)
         for i, sh in enumerate(plan["shots"], 1):
-            scene = _clean_scene(custom_en) if custom_en else sh["scene"]
+            scene = _clean_scene(custom_en) if custom_en else sh["scene"].format(location=location)
             face = "facing the camera directly, head level, clear unobstructed face and eyes" if sh["wear"] else "natural candid pose"
             portrait = f"{sh['framing']} of {plan['subject']}, {scene}, {face}, {plan['look']}"
             motion = sh["motion"] if not custom_en else f"{sh['motion']} Setting: {custom_en}."
@@ -643,6 +688,259 @@ def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
         "transforms": Ms, "transforms_raw": Ms_full,
     }
     return out, stats
+"""
+
+SALVAGE_CODE = r"""
+# espner_salvage.py - keep only the usable part of an AI-generated clip.
+# numpy + opencv only. No triple double quotes in this file (it is embedded in a string).
+#
+# frame_quality(): per-frame sharpness / ghosting / structure / glasses -> good mask
+# select_usable(): longest good run, extended with an eased camera move on the last good frame
+import cv2
+import numpy as np
+
+# ---- thresholds (calibrated on refA/refB pro ads, synthetic_ghost, drive/v, synthetic LTX decay)
+TH_REL_SHARP = 0.45   # below this fraction of the segment's initial sharpness -> blurred/smeared
+TH_GHOST = 0.09       # autocorr double-edge excess above the segment start -> double exposure
+TH_GHOST_ABS = 0.25   # absolute autocorr excess (with ABS_SOFT) for clips that start already ghosted
+ABS_SOFT = 45.0       # Laplacian variance at 360 px below which a frame is 'very soft'
+TH_STRUCT = 0.10      # SSIM-like similarity to the segment anchor frame -> morph/divergence
+TH_STRUCT_LOC = 0.45  # SSIM-like similarity to frame i-2 (sudden morph jump, not a cut)
+TH_GLASSES = 0.5      # tracker overlay opacity below this -> product lost
+CUT_STRUCT = 0.25     # struct_local below this together with a big histogram change = hard cut
+TRAIL = 30            # trailing window (frames) for the sharpness reference
+LW = 360              # analysis width
+SW = 64               # structure analysis width
+GR0, GR1 = 4, 26      # ghost autocorr lag annulus (px at LW)
+
+
+def _small_gray(f, w=LW):
+    h = max(2, int(round(f.shape[0] * w / float(f.shape[1]))))
+    s = cv2.resize(f, (w, h), interpolation=cv2.INTER_AREA)
+    return cv2.cvtColor(s, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+
+def _sharp(g):
+    return float(cv2.Laplacian(g, cv2.CV_32F).var())
+
+
+_ANN = None
+
+
+def _annulus():
+    global _ANN
+    if _ANN is None:
+        yy, xx = np.mgrid[-GR1:GR1 + 1, -GR1:GR1 + 1]
+        rr = np.hypot(yy, xx)
+        _ANN = (rr >= GR0) & (rr <= GR1)
+    return _ANN
+
+
+def _ghost_ex(g):
+    # Edge doubling score. A double exposure (frame + shifted copy of itself) puts a
+    # secondary bump in the autocorrelation of the high-passed image at the shift
+    # offset (any direction, so we take the max over a lag annulus of 4..26 px).
+    # score = max over annulus of (autocorr - gaussian-smoothed autocorr), normalised by
+    # the zero-lag energy. The caller subtracts the value of the segment's first frames
+    # because textured content (pavement, fabric) has a nonzero baseline.
+    hp = g - cv2.GaussianBlur(g, (0, 0), 3)
+    hp = hp - hp.mean()
+    h, w = hp.shape
+    e0 = float((hp * hp).sum())
+    if e0 < 1e-3:
+        return 0.0
+    F = np.fft.rfft2(hp, s=(h * 2, w * 2))
+    ac = np.fft.fftshift(np.fft.irfft2(np.abs(F) ** 2, s=(h * 2, w * 2)))
+    a = (ac[h - GR1:h + GR1 + 1, w - GR1:w + GR1 + 1] / ac[h, w]).astype(np.float32)
+    ex = a - cv2.GaussianBlur(a, (0, 0), 4)
+    return float(ex[_annulus()].max())
+
+
+def _ssim(a, b):
+    # global-ish SSIM on 64 px images with a gaussian window, mean over image
+    c1, c2 = 6.5025, 58.5225
+    ma = cv2.GaussianBlur(a, (0, 0), 2)
+    mb = cv2.GaussianBlur(b, (0, 0), 2)
+    saa = cv2.GaussianBlur(a * a, (0, 0), 2) - ma * ma
+    sbb = cv2.GaussianBlur(b * b, (0, 0), 2) - mb * mb
+    sab = cv2.GaussianBlur(a * b, (0, 0), 2) - ma * mb
+    s = ((2 * ma * mb + c1) * (2 * sab + c2)) / ((ma * ma + mb * mb + c1) * (saa + sbb + c2))
+    return float(s.mean())
+
+
+def _hist_diff(a, b):
+    ha = cv2.calcHist([a.astype(np.uint8)], [0], None, [32], [0, 256]).ravel()
+    hb = cv2.calcHist([b.astype(np.uint8)], [0], None, [32], [0, 256]).ravel()
+    ha /= ha.sum() + 1e-9
+    hb /= hb.sum() + 1e-9
+    return float(0.5 * np.abs(ha - hb).sum())
+
+
+def frame_quality(frames_bgr, ref_bgr=None, glasses_opacity=None):
+    n = len(frames_bgr)
+    gs = [_small_gray(f) for f in frames_bgr]
+    sm = [cv2.resize(g, (SW, max(2, int(round(g.shape[0] * SW / float(g.shape[1]))))),
+                     interpolation=cv2.INTER_AREA) for g in gs]
+    sharp = np.array([_sharp(g) for g in gs], np.float64)
+    gex = np.array([_ghost_ex(g) for g in gs], np.float64)
+    # hard cuts (professional footage only; LTX clips are one shot): big structural AND
+    # histogram change between consecutive frames. Segments re-anchor sharp/ghost/struct.
+    seg_start = np.zeros(n, int)
+    cur = 0
+    sloc = np.ones(n)
+    for i in range(1, n):
+        s1 = _ssim(sm[i], sm[i - 1])
+        if s1 < CUT_STRUCT and _hist_diff(gs[i], gs[i - 1]) > 0.18:
+            cur = i
+        seg_start[i] = cur
+        j = max(cur, i - 2)
+        sloc[i] = _ssim(sm[i], sm[j]) if j < i else 1.0
+    rel = np.ones(n)
+    ghost = np.zeros(n)
+    struct = np.ones(n)
+    ref_sharp = None
+    ref_ex = None
+    if ref_bgr is not None:
+        rg = _small_gray(ref_bgr)
+        ref_sharp = _sharp(rg)
+        ref_ex = _ghost_ex(rg)
+    starts = sorted(set(seg_start.tolist()))
+    for k, s in enumerate(starts):
+        e = n
+        for t in starts:
+            if t > s:
+                e = t
+                break
+        idx = np.arange(s, e)
+        head = idx[:5]
+        base_s = float(np.median(sharp[head]))
+        base_e = float(np.median(gex[head]))
+        if k == 0 and ref_sharp is not None:
+            base_s = ref_sharp
+            base_e = min(base_e, ref_ex)
+        # reference = min(segment-start sharpness, trailing max over the last TRAIL frames):
+        # a fast blur-out (LTX decay) is far below its own recent past, while a slow
+        # legitimate change (zoom out, rack focus over >1 s) is forgiven.
+        for i in idx:
+            tm = float(np.max(sharp[max(s, i - TRAIL):i + 1]))
+            rel[i] = sharp[i] / max(min(base_s, tm * 1.0), 1e-6) if i - s >= 5 else sharp[i] / max(base_s, 1e-6)
+        ghost[idx] = np.maximum(0.0, gex[idx] - base_e)
+        for i in idx:
+            struct[i] = _ssim(sm[i], sm[s])
+    if glasses_opacity is None:
+        glass = np.ones(n)
+    else:
+        glass = np.asarray(glasses_opacity, np.float64).reshape(-1)[:n]
+        if len(glass) < n:
+            glass = np.concatenate([glass, np.full(n - len(glass), glass[-1] if len(glass) else 1.0)])
+    # ghost gate: an autocorr excess above the segment baseline is only damning when the
+    # frame is also softer than its past (rel<0.85); sharp frames tolerate 3x more excess
+    # (pavement/fabric texture changes). Absolute rule: a doubled AND very soft frame.
+    ghost_bad = (ghost > np.where(rel < 0.85, TH_GHOST, 3 * TH_GHOST)) | \
+                ((gex > TH_GHOST_ABS) & (sharp < ABS_SOFT))
+    # struct gate: divergence from the anchor only counts when the frame is also softer
+    # (camera moves in good footage lower SSIM-to-frame-0 while staying sharp)
+    struct_bad = (struct < TH_STRUCT) & (rel < 0.8)
+    good = ((rel >= TH_REL_SHARP) & ~ghost_bad & ~struct_bad
+            & (sloc >= TH_STRUCT_LOC) & (glass >= TH_GLASSES))
+    return {"rel_sharp": rel, "ghost": ghost, "struct": struct, "struct_local": sloc,
+            "glasses": glass, "good": good.astype(bool), "ghost_abs": gex, "sharp_abs": sharp}
+
+
+def _longest_run(good, min_len=1):
+    # longest contiguous True run; ties -> earliest start (frame 0 matches the keyframe)
+    best = None
+    i = 0
+    n = len(good)
+    while i < n:
+        if good[i]:
+            j = i
+            while j + 1 < n and good[j + 1]:
+                j += 1
+            if best is None or (j - i + 1) > (best[1] - best[0] + 1):
+                best = (i, j)
+            i = j + 1
+        else:
+            i += 1
+    return best
+
+
+def _ease(t):
+    return t * t * (3 - 2 * t)
+
+
+def camera_move(img_bgr, n, start_scale=1.0, end_scale=1.05, drift=(6.0, -4.0), t0=0.0, t1=1.0):
+    # slow eased push-in with slight drift around the image centre, n frames.
+    # t0..t1 is the eased progress range covered (so a hold can continue from a start state).
+    h, w = img_bgr.shape[:2]
+    out = []
+    for i in range(n):
+        u = t0 + (t1 - t0) * (i / float(max(1, n - 1)))
+        e = _ease(min(1.0, max(0.0, u)))
+        s = start_scale + (end_scale - start_scale) * e
+        dx = drift[0] * e * w / 720.0
+        dy = drift[1] * e * h / 1280.0
+        M = np.float32([[s, 0, (1 - s) * w / 2.0 + dx], [0, s, (1 - s) * h / 2.0 + dy]])
+        out.append(cv2.warpAffine(img_bgr, M, (w, h), flags=cv2.INTER_LINEAR,
+                                  borderMode=cv2.BORDER_REFLECT))
+    return out
+
+
+def _smooth_score(q):
+    # per-frame quality score used to pick the best window: sharpness + low ghost + structure
+    s = np.clip(q["rel_sharp"], 0, 1.2) + q["struct"] - 3.0 * q["ghost"]
+    return s
+
+
+def select_usable(frames_bgr, target_n, ref_bgr=None, glasses_opacity=None, min_good_frac=0.5):
+    n = len(frames_bgr)
+    q = frame_quality(frames_bgr, ref_bgr, glasses_opacity)
+    run = _longest_run(q["good"])
+    info = {"good_run": None, "used_ai_frames": 0, "held_frames": 0, "fallback": False,
+            "mean_rel_sharp": float(np.mean(q["rel_sharp"])) if n else 0.0,
+            "good_frac": float(q["good"].mean()) if n else 0.0}
+    base = ref_bgr if ref_bgr is not None else (frames_bgr[0] if n else None)
+    runlen = 0 if run is None else run[1] - run[0] + 1
+    # min_good_frac: if the clip is mostly bad but has a long enough run we still use it;
+    # a run shorter than 6 frames is a fallback regardless.
+    if run is None or runlen < 6:
+        info["fallback"] = True
+        info["held_frames"] = target_n
+        return camera_move(base, target_n), info
+    a, b = run
+    if runlen >= target_n:
+        sc = _smooth_score(q)
+        # prefer windows starting at/near frame a: tiny bias for earlier windows
+        best, bi = -1e9, a
+        cs = np.concatenate([[0], np.cumsum(sc)])
+        for s in range(a, b - target_n + 2):
+            m = (cs[s + target_n] - cs[s]) / target_n - 0.002 * (s - a)
+            if m > best:
+                best, bi = m, s
+        a2, b2 = bi, bi + target_n - 1
+        info.update(good_run=(a, b), window=(a2, b2), used_ai_frames=target_n)
+        out = [frames_bgr[i] for i in range(a2, b2 + 1)]
+        info["mean_rel_sharp"] = float(np.mean(q["rel_sharp"][a2:b2 + 1]))
+        return out, info
+    m = target_n - runlen
+    out = [frames_bgr[i] for i in range(a, b + 1)]
+    last = frames_bgr[b]
+    # held tail: eased push-in 1.00->1.05 (+ slight drift) from the last good frame.
+    # Eased progress starts at zero velocity, so the held frame begins still; the last
+    # 4 AI frames are cross-faded toward the held frame so the live motion dies out
+    # smoothly instead of freezing with a visible jump. No time-stretch / interpolation.
+    hold = camera_move(last, m)
+    nf = min(4, m, runlen)
+    # cross-fade: last nf AI frames mix toward the (static-start) held frame so motion
+    # inside the footage dies out gradually instead of freezing abruptly
+    for k in range(nf):
+        al = (k + 1) / float(nf + 1)
+        ai = out[len(out) - nf + k]
+        out[len(out) - nf + k] = cv2.addWeighted(ai, 1 - al, last, al, 0)
+    out.extend(hold)
+    info.update(good_run=(a, b), used_ai_frames=runlen, held_frames=m)
+    info["mean_rel_sharp"] = float(np.mean(q["rel_sharp"][a:b + 1]))
+    return out, info
 """
 
 STAGE_3A_CODE = r"""
@@ -1241,13 +1539,49 @@ def apply_real_glasses(sid, out_p):
     print(f"     👓 真實眼鏡逐格貼回：追蹤信心 {st.get('mean_conf', 0):.2f}｜貼回 {st.get('frames_overlaid', 0)} 格｜淡出 {st.get('frames_faded', 0)} 格")
     return st
 
+def salvage_clip(sid, out_p, glasses_opacity=None):
+    # 只保留清晰、沒變形、眼鏡追蹤穩定的連續片段；不夠長就用最後一個好畫面做慢推鏡補足 (不補幀、不拉長)
+    import espner_salvage as SV
+    cap = cv2.VideoCapture(out_p)
+    frames = []
+    while True:
+        ok, fr = cap.read()
+        if not ok:
+            break
+        frames.append(fr)
+    cap.release()
+    if not frames:
+        return None
+    n = int(round(DURS[sid] * 24))
+    ref = cv2.resize(cv2.imread(f"/content/temp/keyframe_shot{sid}.png"), (OUT_W, OUT_H), interpolation=cv2.INTER_AREA)
+    op = None
+    if glasses_opacity is not None and len(glasses_opacity) == len(frames):
+        op = np.asarray(glasses_opacity, dtype=np.float32)
+    out, info = SV.select_usable(frames, n, ref_bgr=ref, glasses_opacity=op)
+    tmp = out_p.replace(".mp4", "_salv.mp4")
+    vw = cv2.VideoWriter(tmp, cv2.VideoWriter_fourcc(*"mp4v"), 24.0, (OUT_W, OUT_H))
+    for fr in out:
+        vw.write(fr)
+    vw.release()
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", tmp, "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", out_p], check=True)
+    print(f"     ✂️ 挑選可用片段：AI 畫面 {info.get('used_ai_frames')} 格 + 補足 {info.get('held_frames')} 格 (共 {n} 格){'｜改用首幀運鏡' if info.get('fallback') else ''}")
+    return info
+
 def post_shot(sid, out_p, entry):
+    st = None
     try:
         st = apply_real_glasses(sid, out_p)
         if st:
             entry["glasses_conf"] = round(float(st.get("mean_conf", 0)), 2)
     except Exception as e:
         print(f"     ⚠️ 真實眼鏡貼回略過 ({e})")
+    try:
+        info = salvage_clip(sid, out_p, (st or {}).get("opacity"))
+        if info:
+            entry["ai_frames_used"] = int(info.get("used_ai_frames", 0))
+            entry["held_frames"] = int(info.get("held_frames", 0))
+    except Exception as e:
+        print(f"     ⚠️ 片段挑選略過 ({e})")
 
 def ltx_preprocess(img, crf):
     # LTX 以壓縮影片訓練；乾淨照片當首幀容易產生「凍結」影片 → 先經過一次 H.264 壓縮
@@ -1359,7 +1693,8 @@ try:
         embeds = torch.load("/content/temp/prompt_embeds.pt", map_location="cpu", weights_only=False) if LTX_CHILD else {}
         # 0.9.5 的圖生影片動態遠優於 0.9.0；兩者共用同一個 T5，若 0.9.5 失敗自動退回 0.9.0
         LTX_REPOS = ["Lightricks/LTX-Video-0.9.5", "Lightricks/LTX-Video"]
-        LTX_W, LTX_H, LTX_STEPS = (832, 480, 30) if LANDSCAPE else (480, 832, 30)
+        # 576x1024：比 480x832 清晰 1.4 倍，運算量約 1.5 倍；搭配 3 秒短鏡頭控制 T4 時間
+        LTX_W, LTX_H, LTX_STEPS = (1024, 576, 30) if LANDSCAPE else (576, 1024, 30)
 
         def ltx_frames_for(dur):
             # 直接生成整段長度 (8k+1 格)，不靠補幀拉長 → 避免殘影；上限 145 格 (6 秒) 以控制 T4 時間
@@ -2770,6 +3105,360 @@ def mux_audio(video_in, audio_in, video_out, target_lufs=-16.0, fade_in=0.5, fad
     return video_out
 """
 
+HOUSE_CODE = r"""
+# espner_house.py
+# ESPNER house style: approved beige transition card (E S P N E R -> MODEL) and white studio endcard.
+# numpy + opencv-python-headless + Pillow only. Frames are uint8 BGR lists.
+# Layout is specified for a 720x1280 portrait canvas. Other sizes use a centred "column" of
+# 720*s x 1280*s with s = min(W/720, H/1280); y positions are fractions of H, x are column-relative,
+# so 1920x1080 gives a centred 607x1080 column on the same background (the parchment fills all of W).
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+
+TAGLINES = {
+    "MADRID": ("光影流轉，定格永恆姿態。", "TIMELESS ARCHITECTURAL DESIGN"),
+    "CELEBRITY": ("無懼聚焦，從容定義萬眾目光。", "AVANT-GARDE STATEMENT SERIES"),
+    "PILOT": ("破空逐光，從容浩瀚蒼穹。", "ICONIC AVIATOR POLARIZED"),
+    "AVIATOR": ("馳騁天地，尊享自由航程。", "SIGNATURE GOLD AVIATOR"),
+    "ENGELBERG TITLIS": ("風雪漫天，唯有焦點不移。", "TITLIS STORM ALL-WEATHER OPTICS"),
+}
+DEFAULT_TAGLINE = ("把目光，還給世界。", "POLARIZED LUXURY EYEWEAR")
+
+# colours (RGB)
+INK = (13, 16, 30)          # #0D101E
+SLATE = (71, 78, 90)        # #474E5A
+ZH_INK = (13, 17, 26)       # #0D111A
+EN_GREY = (105, 108, 117)   # #696C75
+GOLD = (104, 82, 40)        # card2 line 2
+CARD_GREY = (92, 88, 82)    # card2 line 3
+BOX_OUT = (157, 134, 92)    # #9D865C
+BOX_IN = (191, 183, 170)    # #BFB7AA
+PARCH = (227, 220, 197)     # #E3DCC5
+BG_END = (251, 253, 250)    # #FBFDFA
+PEAK = (250, 250, 246)      # card dissolve peak lightness
+
+# Times-like bold: Liberation Serif Bold is metric-compatible with Times New Roman Bold (the approved look).
+# Fallbacks: FreeSerif Bold, DejaVu Serif Bold, Noto Serif CJK Bold.
+_SERIF_B = ["/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSerif-Bold.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSerifBold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc"]
+_SERIF_R = ["/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSerif-Regular.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSerif.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc"]
+_SANS_B = ["/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+           "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+_CJK = [("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 3),
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
+        ("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", 3),
+        ("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc", 3),
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 0)]
+
+_SS = 4  # text supersampling factor
+
+
+def _load(paths, size):
+    for p in paths:
+        path, idx = (p if isinstance(p, tuple) else (p, 0))
+        try:
+            return ImageFont.truetype(path, int(round(size)), index=idx)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def tagline_for(model_name):
+    k = str(model_name or "").strip().upper()
+    return TAGLINES.get(k, DEFAULT_TAGLINE)
+
+
+def _scale(W, H):
+    return min(W / 720.0, H / 1280.0)
+
+
+def _render_line(text, paths, size_px, tracking_em, thin=0):
+    # Render one tracked line; returns (alpha float32 HxW tight to ink, ink width, ink height).
+    # size_px is the target font size at 1x; drawing happens at _SS x and is area-downsampled.
+    f = _load(paths, size_px * _SS)
+    trk = tracking_em * size_px * _SS
+    x = 0.0
+    pos = []
+    for ch in text:
+        pos.append(x)
+        x += f.getlength(ch) + trk
+    wtot = int(x + size_px * _SS * 2)
+    htot = int(size_px * _SS * 2)
+    im = Image.new("L", (wtot, htot), 0)
+    d = ImageDraw.Draw(im)
+    for ch, px in zip(text, pos):
+        d.text((px + size_px * _SS * 0.5, size_px * _SS * 0.3), ch, font=f, fill=255)
+    a = np.asarray(im)
+    if thin > 0:
+        a = cv2.erode(a, np.ones((thin, thin), np.uint8))
+    ys, xs = np.where(a > 8)
+    if len(xs) == 0:
+        return np.zeros((1, 1), np.float32), 1, 1
+    a = a[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    h, w = a.shape
+    # pad to a multiple of _SS so area-downsample is exact
+    ph, pw = (-h) % _SS, (-w) % _SS
+    a = np.pad(a, ((0, ph), (0, pw)))
+    small = cv2.resize(a, (a.shape[1] // _SS, a.shape[0] // _SS), interpolation=cv2.INTER_AREA)
+    return small.astype(np.float32) / 255.0, w / _SS, h / _SS
+
+
+def _paste(canvas_a, canvas_c, line, color, cx, y_top):
+    # Accumulate a rendered line into a float alpha canvas + colour canvas (RGB float). Ink-bbox placement.
+    a = line[0]
+    h, w = a.shape
+    x0 = int(round(cx - w / 2.0))
+    y0 = int(round(y_top))
+    H, W = canvas_a.shape
+    xa, ya = max(0, x0), max(0, y0)
+    xb, yb = min(W, x0 + w), min(H, y0 + h)
+    if xb <= xa or yb <= ya:
+        return (x0, y0, w, h)
+    sub = a[ya - y0:yb - y0, xa - x0:xb - x0]
+    cur = canvas_a[ya:yb, xa:xb]
+    newa = sub + cur * (1 - sub)
+    for c in range(3):
+        canvas_c[ya:yb, xa:xb, c] = np.where(newa > 1e-6, (color[c] * sub + canvas_c[ya:yb, xa:xb, c] * cur * (1 - sub)) / np.maximum(newa, 1e-6), 0)
+    canvas_a[ya:yb, xa:xb] = newa
+    return (x0, y0, w, h)
+
+
+def _parchment(W, H):
+    # Deterministic mottled parchment with slight top->bottom gradient (BGR float32 HxWx3).
+    rng = np.random.RandomState(1234)
+    base = np.zeros((H, W), np.float32)
+    for sc, amp in ((96, 1.1), (40, 0.75), (14, 0.35)):
+        n = rng.randn(max(2, H // sc + 2), max(2, W // sc + 2)).astype(np.float32)
+        n = cv2.resize(n, (W, H), interpolation=cv2.INTER_CUBIC)
+        base += n * amp
+    # a few elongated cloudy blotches
+    for _ in range(14):
+        cx, cy = rng.randint(0, W), rng.randint(0, H)
+        ax, ay = rng.randint(W // 12, W // 4), rng.randint(H // 80, H // 30)
+        blot = np.zeros((H, W), np.float32)
+        cv2.ellipse(blot, (cx, cy), (ax, ay), rng.randint(-20, 20), 0, 360, float(rng.choice([-1, 1]) * rng.uniform(1.0, 2.2)), -1)
+        base += cv2.GaussianBlur(blot, (0, 0), 14)
+    base = cv2.GaussianBlur(base, (0, 0), 1.2)
+    top = np.array([229, 220, 203], np.float32)
+    bot = np.array([224, 218, 195], np.float32)
+    t = np.linspace(0, 1, H, dtype=np.float32)[:, None, None]
+    rgb = top * (1 - t) + bot * t
+    rgb = rgb + base[:, :, None] * np.array([1.0, 1.0, 1.15], np.float32)
+    return rgb[:, :, ::-1].copy()
+
+
+def _fit_zh_size(text, target_h):
+    # choose CJK font size so the ink height of the line equals target_h px (1x)
+    return target_h / 0.90
+
+
+def _blend_over(bg, a, color_rgb_canvas):
+    # bg BGR float32; a HxW alpha; colour canvas RGB float
+    col = color_rgb_canvas[:, :, ::-1]
+    return bg * (1 - a[:, :, None]) + col * a[:, :, None]
+
+
+def _box_layer(W, H, s):
+    # box mask drawn once: returns (outer mask, inner mask) uint8 at frame size
+    cx = W / 2.0
+    x0, x1 = cx - 290 * s, cx + 290 * s
+    y0, y1 = 480 * H / 1280.0, 790 * H / 1280.0
+    if H != 1280:
+        # keep vertical box proportions of H for the 9:16 case; for other aspect ratios use scale s about centre
+        if abs(W / H - 720 / 1280.0) > 0.01:
+            cy = 0.496 * H
+            y0, y1 = cy - 155 * s, cy + 155 * s
+    outer = np.zeros((H, W), np.uint8)
+    inner = np.zeros((H, W), np.uint8)
+    lw = max(1, int(round(2 * s)))
+    cv2.rectangle(outer, (int(round(x0)), int(round(y0))), (int(round(x1)) - 1, int(round(y1)) - 1), 255, lw)
+    ins = max(2, int(round(6 * s)))
+    cv2.rectangle(inner, (int(round(x0)) + ins, int(round(y0)) + ins), (int(round(x1)) - 1 - ins, int(round(y1)) - 1 - ins), 255, 1)
+    return outer, inner, (x0, y0, x1, y1)
+
+
+def _text_layers_cards(model_name, W, H, s):
+    # returns dict of (alpha HxW float32, colour canvas RGB float32) for card1 and card2 text
+    cx = W / 2.0
+    box_cy = 0.496 * H
+    # card 1: brand, cap h 35 px at 1x, cap-top y 617
+    l1 = _render_line("ESPNER", _SERIF_B, 35 * s / 0.662, 0.47)
+    a1 = np.zeros((H, W), np.float32); c1 = np.zeros((H, W, 3), np.float32)
+    _paste(a1, c1, l1, INK, cx, box_cy - 18 * s)
+    # card 2
+    name = str(model_name).upper()
+    l2 = _render_line(name, _SERIF_B, 48 * s / 0.662, 0.0)
+    l3 = _render_line("ESPNER EYEWEAR ARCHIVE", _SERIF_R, 15 * s / 0.662, 0.15)
+    l4 = _render_line("POLARIZED LUXURY COLLECTION", _SERIF_R, 15 * s / 0.662, 0.06)
+    a2 = np.zeros((H, W), np.float32); c2 = np.zeros((H, W, 3), np.float32)
+    # shrink long names so they stay inside the box
+    maxw = 520 * s
+    if l2[0].shape[1] > maxw:
+        k = maxw / l2[0].shape[1]
+        l2 = (cv2.resize(l2[0], (int(l2[0].shape[1] * k), max(1, int(l2[0].shape[0] * k))), interpolation=cv2.INTER_AREA), 0, 0)
+    _paste(a2, c2, l2, INK, cx, box_cy - 47 * s)
+    y3 = box_cy + 28 * s
+    y4 = box_cy + 62 * s
+    _paste(a2, c2, l3, GOLD, cx, y3)
+    _paste(a2, c2, l4, CARD_GREY, cx, y4)
+    return (a1, c1), (a2, c2)
+
+
+def _ramp(i, a, b):
+    return float(np.clip((i - a) / float(max(1e-6, b - a)), 0.0, 1.0))
+
+
+def build_house_transition(model_name, W=720, H=1280, fps=24, endcard_first_frame=None):
+    s = _scale(W, H)
+    parch = _parchment(W, H)
+    outer, inner, _ = _box_layer(W, H, s)
+    om = (outer > 0).astype(np.float32)
+    im = ((inner > 0) & (outer == 0)).astype(np.float32)
+    (a1, c1), (a2, c2) = _text_layers_cards(model_name, W, H, s)
+    n1 = int(round(1.0 * fps))
+    n2 = int(round(0.67 * fps))
+    nd = int(round(0.8 * fps))
+    fin = int(round(0.33 * fps))
+    fout = int(round(0.25 * fps))
+    if endcard_first_frame is not None:
+        end = cv2.resize(endcard_first_frame, (W, H)).astype(np.float32) if endcard_first_frame.shape[:2] != (H, W) else endcard_first_frame.astype(np.float32)
+    else:
+        end = np.empty((H, W, 3), np.float32); end[:] = BG_END[::-1]
+    peak = np.empty((H, W, 3), np.float32); peak[:] = PEAK[::-1]
+    boxc_o = np.array(BOX_OUT[::-1], np.float32)
+    boxc_i = np.array(BOX_IN[::-1], np.float32)
+    frames = []
+
+    def compose(base, ta, tc, fa, boxa):
+        f = base
+        f = f * (1 - (om * boxa)[:, :, None]) + boxc_o * (om * boxa)[:, :, None]
+        f = f * (1 - (im * boxa)[:, :, None]) + boxc_i * (im * boxa)[:, :, None]
+        if ta is not None:
+            aa = ta * fa
+            f = f * (1 - aa[:, :, None]) + tc[:, :, ::-1] * aa[:, :, None]
+        return f
+
+    for i in range(n1):
+        fa = min(_ramp(i, 0, fin), 1.0 - _ramp(i, n1 - fout, n1))
+        frames.append(np.clip(compose(parch, a1, c1, fa, 1.0), 0, 255).astype(np.uint8))
+    for i in range(n2):
+        frames.append(np.clip(compose(parch, a2, c2, _ramp(i, 0, fin), 1.0), 0, 255).astype(np.uint8))
+    for i in range(nd):
+        t = (i + 1) / float(nd)
+        if t <= 0.5:
+            u = t / 0.5
+            base = parch * (1 - u) + peak * u
+            f = compose(base, a2, c2, 1.0 - u, 1.0 - u)
+        else:
+            u = (t - 0.5) / 0.5
+            f = peak * (1 - u) + end * u
+        frames.append(np.clip(f, 0, 255).astype(np.uint8))
+    return frames
+
+
+def _prep_product(product_rgba_path, W, H, s, cy_frac, width_frac=0.75):
+    im = Image.open(product_rgba_path).convert("RGBA")
+    arr = np.asarray(im)
+    ys, xs = np.where(arr[:, :, 3] > 10)
+    arr = arr[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    return arr
+
+
+def build_house_endcard(product_rgba_path, model_name, tagline_zh, tagline_en, W=720, H=1280,
+                        duration=4.04, fps=24, snow=False):
+    s = _scale(W, H)
+    cx = W / 2.0
+    name = str(model_name).upper()
+    A = np.zeros((H, W), np.float32)
+    C = np.zeros((H, W, 3), np.float32)
+    if not snow:
+        _paste(A, C, _render_line("ESPNER", _SERIF_B, 33 * s / 0.662, 0.50), INK, cx, 0.1203 * H)
+        _paste(A, C, _render_line(name, _SERIF_B, 19 * s / 0.662, 0.12), SLATE, cx, 0.1688 * H)
+        cy_frac, zh_y, en_y = 0.415, 0.663, 0.7109
+    else:
+        _paste(A, C, _render_line("ESPNER", _SERIF_B, 33 * s / 0.662, 0.50), INK, cx, 0.1273 * H)
+        big = _render_line(name, _SERIF_B, 37 * s / 0.662, 0.12)
+        maxw = 0.86 * W
+        if big[0].shape[1] > maxw:
+            k = maxw / big[0].shape[1]
+            big = (cv2.resize(big[0], (int(big[0].shape[1] * k), max(1, int(big[0].shape[0] * k))), interpolation=cv2.INTER_AREA), 0, 0)
+        _paste(A, C, big, (20, 23, 28), cx, 0.1852 * H)
+        cy_frac, zh_y, en_y = 0.377, 0.601, 0.645
+    # Chinese tagline: faux-light by eroding at supersampled scale
+    zh = _render_line(tagline_zh, _CJK, 29 * s / 0.90, 0.17, thin=3)
+    _paste(A, C, zh, ZH_INK, cx, zh_y * H)
+    if snow:
+        en = _render_line(tagline_en.upper(), _SANS_B, 13 * s / 0.716, 0.20)
+    else:
+        en = _render_line(tagline_en.upper(), _SERIF_R, 13 * s / 0.662, 0.17)
+    _paste(A, C, en, EN_GREY, cx, en_y * H)
+    bg = np.empty((H, W, 3), np.float32); bg[:] = BG_END[::-1]
+    static = np.clip(bg * (1 - A[:, :, None]) + C[:, :, ::-1] * A[:, :, None], 0, 255).astype(np.uint8)
+
+    # product layer with contact shadow baked in (premultiplied BGRA float) at 1.000 scale
+    prod = _prep_product(product_rgba_path, W, H, s, cy_frac)
+    ph0, pw0 = prod.shape[:2]
+    pw = 0.75 * 720 * s
+    ph = pw * ph0 / pw0
+    # snow goggle is taller; cap its height so the layout never collides with text
+    pad_x, pad_top, pad_bot = int(0.05 * pw) + 20, 20, int(0.12 * ph) + 40
+    LW, LH = int(round(pw)) + 2 * pad_x, int(round(ph)) + pad_top + pad_bot
+    pr = cv2.resize(prod, (int(round(pw)), int(round(ph))), interpolation=cv2.INTER_AREA)
+    pa = pr[:, :, 3].astype(np.float32) / 255.0
+    prgb = pr[:, :, :3].astype(np.float32)[:, :, ::-1]  # BGR
+    layer_a = np.zeros((LH, LW), np.float32)
+    layer_c = np.zeros((LH, LW, 3), np.float32)
+    # shadow: ellipse ~80% product width, bottom edge ~15 px below the product bottom, blur ~12 px
+    sh = np.zeros((LH, LW), np.float32)
+    ew = 0.40 * pw
+    eh = max(6.0, 12 * s) * 1.0
+    ecy = pad_top + ph + 15 * s - eh * 0.9
+    cv2.ellipse(sh, (LW // 2, int(round(ecy))), (int(ew), int(eh)), 0, 0, 360, 1.0, -1)
+    sh = cv2.GaussianBlur(sh, (0, 0), 6.0 * s) * 0.18 * 1.9
+    sh = np.clip(sh, 0, 0.3)
+    layer_a = sh.copy()
+    layer_c[:] = (40, 44, 48)  # dark neutral shadow colour (BGR)
+    y0, x0 = pad_top, pad_x
+    sa = layer_a[y0:y0 + pr.shape[0], x0:x0 + pr.shape[1]]
+    newa = pa + sa * (1 - pa)
+    sc = layer_c[y0:y0 + pr.shape[0], x0:x0 + pr.shape[1]]
+    prem = prgb * pa[:, :, None] + sc * (sa * (1 - pa))[:, :, None]
+    # store premultiplied colour for the whole layer
+    prem_full = layer_c * layer_a[:, :, None]
+    prem_full[y0:y0 + pr.shape[0], x0:x0 + pr.shape[1]] = prem
+    layer_a[y0:y0 + pr.shape[0], x0:x0 + pr.shape[1]] = newa
+    premul = np.dstack([prem_full, layer_a]).astype(np.float32)
+    # anchor: product centre (within the layer) at (cx, cy_frac*H)
+    anchor_x = LW / 2.0
+    anchor_y = pad_top + ph / 2.0
+    n = int(round(duration * fps))
+    frames = []
+    for i in range(n):
+        z = 1.0 + 0.035 * (i / float(max(1, n - 1)))
+        zw, zh_ = int(round(LW * z)), int(round(LH * z))
+        L = cv2.resize(premul, (zw, zh_), interpolation=cv2.INTER_LINEAR)
+        ox = int(round(cx - anchor_x * z))
+        oy = int(round(cy_frac * H - anchor_y * z))
+        xa, ya = max(0, ox), max(0, oy)
+        xb, yb = min(W, ox + zw), min(H, oy + zh_)
+        f = static.copy()
+        if xb > xa and yb > ya:
+            sub = L[ya - oy:yb - oy, xa - ox:xb - ox]
+            roi = f[ya:yb, xa:xb].astype(np.float32)
+            out = sub[:, :, :3] + roi * (1.0 - sub[:, :, 3:4])
+            f[ya:yb, xa:xb] = np.clip(out + 0.5, 0, 255).astype(np.uint8)
+        frames.append(f)
+    return frames
+"""
+
 QC_CODE = r"""
 # -*- coding: utf-8 -*-
 # ESPNER video quality check (espner_qc.py)
@@ -3259,8 +3948,13 @@ from IPython.display import display, Image as IPImage
 MODEL_NAME = "AVIATOR" #@param {type:"string"}
 PRODUCT_CATEGORY = "SUNGLASSES (精品太陽眼鏡)" #@param ["SUNGLASSES (精品太陽眼鏡)", "SNOW_GOGGLES (極限滑雪護目鏡)"]
 
-#@markdown ### 🎨 選擇廣告視覺風格 (★ = 依參考廣告片標準的 30 秒版本；其餘為舊版 21 秒風格)
-COMMERCIAL_STYLE = "A_STORY_30S (★參考片A標準：生活敘事 4 鏡 24s + 文案字幕 + 白底分割片尾 6s = 30s)" #@param ["A_STORY_30S (★參考片A標準：生活敘事 4 鏡 24s + 文案字幕 + 白底分割片尾 6s = 30s)", "B_COASTAL_30S (★參考片B標準：特寫→中景→漫步→英雄推近 4 鏡 20s + 灰階展台片尾 10s = 30s)", "0_CLASSIC_MADRID (經典精品：15s雙鏡故事 + 2s金框石牆過場 + 4.5s白底原圖片尾 = 21.5s)", "1_CYBERPUNK_NEON (賽博龐克：霓虹調色 + 光學HUD + 故障轉場 + 5s白底原圖片尾 = 21.0s)", "2_VINTAGE_1985 (復古1985：柯達暖金膠片 + 6s散景金框章節卡 + 5s白底原圖片尾 = 21.0s)", "3_HAUTE_COUTURE_NOIR (高訂黑白：巴黎米蘭黑白時尚邊框 + 5s白底原圖片尾 = 21.0s)", "4_ALPINE_EXTREME (極限冰川：冰藍橘紅HUD + 上下分割雙視角 + 5s白底原圖片尾 = 21.0s)", "5_RIVIERA_SUNSET (里維耶拉夕陽：地中海金色波光 + 5s白底原圖片尾 = 21.0s)"]
+#@markdown ### 🎨 選擇廣告視覺風格 (★★ = 你審核通過的品牌格式，建議；★ = 外部參考片 30 秒版本；其餘為舊版風格)
+COMMERCIAL_STYLE = "H_HOUSE_21S (★★品牌核准格式：依已審核 MADRID/CELEBRITY 成片｜6 鏡 14.5s + 米色金框卡 + 近白片尾 = 21s)" #@param ["H_HOUSE_21S (★★品牌核准格式：依已審核 MADRID/CELEBRITY 成片｜6 鏡 14.5s + 米色金框卡 + 近白片尾 = 21s)", "A_STORY_30S (★參考片A標準：生活敘事 4 鏡 24s + 文案字幕 + 白底分割片尾 6s = 30s)", "B_COASTAL_30S (★參考片B標準：特寫→中景→漫步→英雄推近 4 鏡 20s + 灰階展台片尾 10s = 30s)", "0_CLASSIC_MADRID (經典精品：15s雙鏡故事 + 2s金框石牆過場 + 4.5s白底原圖片尾 = 21.5s)", "1_CYBERPUNK_NEON (賽博龐克：霓虹調色 + 光學HUD + 故障轉場 + 5s白底原圖片尾 = 21.0s)", "2_VINTAGE_1985 (復古1985：柯達暖金膠片 + 6s散景金框章節卡 + 5s白底原圖片尾 = 21.0s)", "3_HAUTE_COUTURE_NOIR (高訂黑白：巴黎米蘭黑白時尚邊框 + 5s白底原圖片尾 = 21.0s)", "4_ALPINE_EXTREME (極限冰川：冰藍橘紅HUD + 上下分割雙視角 + 5s白底原圖片尾 = 21.0s)", "5_RIVIERA_SUNSET (里維耶拉夕陽：地中海金色波光 + 5s白底原圖片尾 = 21.0s)"]
+
+#@markdown ### 🧑 模特兒 / 片尾標語 (標語留空 = 依型號自動帶入已審核標語，例如 MADRID、CELEBRITY、PILOT、AVIATOR)
+TALENT = "自動" #@param ["自動", "女性", "男性"]
+TAGLINE_ZH = "" #@param {type:"string"}
+TAGLINE_EN = "" #@param {type:"string"}
 
 #@markdown ### 📐 輸出比例
 ASPECT_RATIO = "9:16 直式 (IG Reels / 抖音 720x1280)" #@param ["9:16 直式 (IG Reels / 抖音 720x1280)", "16:9 橫式 (YouTube / 官網 1920x1080)"]
@@ -3338,7 +4032,10 @@ cfg = {
     "aspect": "16:9" if ASPECT_RATIO.startswith("16:9") else "9:16",
     "copy": [x.strip() for x in (COPY_LINE_1, COPY_LINE_2, COPY_LINE_3)],
     "music": "none" if MUSIC_SOURCE.startswith("3_") else ("file" if MUSIC_PATH else "auto"),
-    "music_path": MUSIC_PATH
+    "music_path": MUSIC_PATH,
+    "talent": {"女性": "female", "男性": "male"}.get(TALENT, "auto"),
+    "tagline_zh": TAGLINE_ZH.strip(),
+    "tagline_en": TAGLINE_EN.strip()
 }
 with open("/content/temp/job_config.json", "w", encoding="utf-8") as f:
     json.dump(cfg, f, ensure_ascii=False, indent=2)
@@ -3570,7 +4267,8 @@ def iter_reference_timeline():
         if copies:
             print("ℹ️ 步驟 2 的文案是空的，改用預設文案")
     lut = G.build_lut(plan["grade"])
-    mark = T.render_brand_mark_layer(W, H, position=plan["brand_mark"])
+    mark = T.render_brand_mark_layer(W, H, position=plan["brand_mark"]) if plan.get("brand_mark") else None
+    gstr = float(plan.get("grade_strength", 0.3))
     prev_last = None
     for sh in shots:
         n = int(round(sh["dur"] * 24))
@@ -3583,16 +4281,16 @@ def iter_reference_timeline():
             lines = [x for x in copies[ci].split("/") if x.strip()]
             print(f"  ✍️ 第 {sh['id']} 鏡文案：{' '.join(lines)}")
             layer = T.render_copy_layer(W, H, lines, brand_mark=False, align="left")
-            if T.text_color_for(G.grade_frame(frames[len(frames) // 2], plan["grade"], lut=lut, strength=0.5), layer) == "light":
+            if T.text_color_for(G.grade_frame(frames[len(frames) // 2], plan["grade"], lut=lut, strength=gstr), layer) == "light":
                 layer = T.render_copy_layer(W, H, lines, brand_mark=False, align="left", color="light")
         for i, fr in enumerate(frames):
             t = i / 24.0
-            out = G.grade_frame(fr, plan["grade"], lut=lut, strength=0.5)
-            out = G.add_grain(out, amount=2.0, seed=i)
+            out = G.grade_frame(fr, plan["grade"], lut=lut, strength=gstr)
+            out = G.add_grain(out, amount=1.5, seed=i)
             if prev_last is not None and i < 4:
                 # 4 格柔和溶接，避免硬切的跳動感
                 out = cv2.addWeighted(prev_last, 1.0 - (i + 1) / 5.0, out, (i + 1) / 5.0, 0)
-            if plan["brand_mark"] == "top-left" or sh["id"] == 1:
+            if mark is not None and (plan["brand_mark"] == "top-left" or sh["id"] == 1):
                 mark_op = 1.0 if plan["brand_mark"] == "top-left" else T.fade_opacity(t, 0.6, 4.0, fade=0.5)
                 if mark_op > 0:
                     out = T.overlay_layer(out, mark, 0.85 * mark_op)
@@ -3602,6 +4300,19 @@ def iter_reference_timeline():
                     out = T.overlay_layer(out, layer, op)
             yield out
         prev_last = out
+    if plan["endcard"] == "house":
+        # ★★ 品牌核准格式：故事硬切 → 米色金框卡 (E S P N E R → 型號) → 溶接 → 近白片尾 (型號專屬標語)
+        import espner_house as HS
+        zh, en = HS.tagline_for(display_name)
+        zh = cfg.get("tagline_zh") or zh
+        en = cfg.get("tagline_en") or en
+        print(f"  🏷️ 片尾標語：{zh}｜{en}")
+        end = HS.build_house_endcard("/content/temp/product_clean_rgba.png", display_name, zh, en, W=W, H=H, duration=4.04, fps=24, snow=is_snow)
+        for fr in HS.build_house_transition(display_name, W=W, H=H, fps=24, endcard_first_frame=end[0]):
+            yield fr
+        for fr in end:
+            yield fr
+        return
     slogan = [x for x in (copies[2] if len(copies) > 2 and copies[2] else "把目光，/還給世界。").split("/") if x.strip()]
     if plan["endcard"] == "split":
         end = T.build_endcard_split("/content/temp/product_clean_rgba.png", W, H, display_name, slogan_lines=tuple(slogan), category="SNOW GOGGLES" if is_snow else "SUNGLASSES", duration=plan["endcard_dur"], fps=24)
@@ -3752,6 +4463,9 @@ sheet_jpg = f"/content/output/ESPNER_{safe_name}_QA_sheet.jpg"
 tw, th = (426, 240) if w > h else (240, 426)
 tiles = []
 for idx in indices:
+    if idx not in qa:
+        tiles.append(np.zeros((th, tw, 3), np.uint8))
+        continue
     t_img = cv2.resize(qa[idx], (tw, th))
     cv2.putText(t_img, f"f:{idx} ({idx/24.0:.1f}s)", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0,0,0), 3)
     cv2.putText(t_img, f"f:{idx} ({idx/24.0:.1f}s)", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255,255,255), 1)
@@ -3784,11 +4498,11 @@ def step4_lines():
     out = []
     for ln in cell_lines(STEP4_CODE):
         if ln.strip() == "# __EMBED_MODULES__":
-            for var, fname, code in [("titles_code", "espner_titles.py", TITLES_CODE), ("grade_code", "espner_grade.py", GRADE_CODE), ("audio_code", "espner_audio.py", AUDIO_CODE), ("qc_code", "espner_qc.py", QC_CODE)]:
+            for var, fname, code in [("titles_code", "espner_titles.py", TITLES_CODE), ("grade_code", "espner_grade.py", GRADE_CODE), ("audio_code", "espner_audio.py", AUDIO_CODE), ("qc_code", "espner_qc.py", QC_CODE), ("house_code", "espner_house.py", HOUSE_CODE)]:
                 out += embed_stage(var, code)
                 out.append(f'open("/content/temp/{fname}", "w", encoding="utf-8").write({var})\n')
             out.append("import importlib, sys as _sys\n")
-            out.append("for _m in (\"espner_titles\", \"espner_grade\", \"espner_audio\", \"espner_qc\", \"shot_plan\"):\n")
+            out.append("for _m in (\"espner_titles\", \"espner_grade\", \"espner_audio\", \"espner_qc\", \"espner_house\", \"shot_plan\"):\n")
             out.append("    _sys.modules.pop(_m, None)\n")
         else:
             out.append(ln)
@@ -3854,7 +4568,7 @@ cells = [
             "ensure_cuda_torch(required=False)\n",
             "\n",
             "subprocess.run([\"apt-get\", \"update\", \"-qq\"], check=True)\n",
-            "subprocess.run([\"apt-get\", \"install\", \"-y\", \"-qq\", \"ffmpeg\", \"fonts-noto-cjk\", \"fonts-dejavu-core\"], check=True)\n",
+            "subprocess.run([\"apt-get\", \"install\", \"-y\", \"-qq\", \"ffmpeg\", \"fonts-noto-cjk\", \"fonts-dejavu-core\", \"fonts-liberation\"], check=True)\n",
             "\n",
             "for d in [\"/content/input\", \"/content/output\", \"/content/temp\"]:\n",
             "    os.makedirs(d, exist_ok=True)\n",
@@ -3913,7 +4627,7 @@ cells = [
             "# ==============================================================================\n",
             "# 子程序腳本 3A：純 OpenCV 零記憶體去背 + 中英導演提示詞自動翻譯 + RealVisXL 真人模特兒生成 + 100% 原始眼鏡配戴合成\n",
             "# ==============================================================================\n",
-        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("track_code", TRACK_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
+        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("track_code", TRACK_CODE) + embed_stage("salvage_code", SALVAGE_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
             "\n",
             "# ==============================================================================\n",
             "# 子程序腳本 3B：獨立文字編碼器 (T4 原生 FP16 加速，算完即釋放 9.5GB T5 記憶體！)\n",
@@ -3927,6 +4641,7 @@ cells = [
             "\n",
             "Path(\"/content/temp/shot_plan.py\").write_text(shot_plan_code, encoding=\"utf-8\")\n",
             "Path(\"/content/temp/espner_track.py\").write_text(track_code, encoding=\"utf-8\")\n",
+            "Path(\"/content/temp/espner_salvage.py\").write_text(salvage_code, encoding=\"utf-8\")\n",
             "import glob as _glob\n",
             "for _old in _glob.glob(\"/content/temp/keyframe_shot*.png\") + _glob.glob(\"/content/temp/glasses_shot*.png\") + _glob.glob(\"/content/temp/raw_shot*.mp4\") + [\"/content/temp/glasses_meta.json\"] + [\"/content/temp/stage3c_status.json\", \"/content/temp/prompt_embeds.pt\"]:\n",
             "    if os.path.exists(_old):\n",
@@ -3982,7 +4697,7 @@ cells = [
             "    with open(_st_p, \"r\", encoding=\"utf-8\") as _f:\n",
             "        _st = json.load(_f)\n",
             "    if _st.get(\"ai_ok\"):\n",
-            "        _m = \"\\n   \".join(f\"第{x['shot']}鏡：動態 {x['motion']}｜首幀相似度 {x.get('first_frame_sim', '-')}｜連續性 {x.get('continuity', '-')}｜真實眼鏡追蹤信心 {x.get('glasses_conf', '-')}\" for x in _st.get(\"shots\", []))\n",
+            "        _m = \"\\n   \".join(f\"第{x['shot']}鏡：動態 {x['motion']}｜首幀相似度 {x.get('first_frame_sim', '-')}｜連續性 {x.get('continuity', '-')}｜真實眼鏡追蹤信心 {x.get('glasses_conf', '-')}｜AI 可用 {x.get('ai_frames_used', '-')} 格、補足 {x.get('held_frames', '-')} 格\" for x in _st.get(\"shots\", []))\n",
             "        print(f\"\\n✅ AI 動態影片完成｜引擎：{_st.get('engine')}\\n   {_m}\")\n",
             "        print(\"   (motion ≥ 3 代表人物/鏡頭有明顯動作；低於 3 時已自動重試並疊加推軌運鏡)\")\n",
             "    else:\n",
