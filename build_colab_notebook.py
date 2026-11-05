@@ -657,6 +657,259 @@ def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
     return out, stats
 """
 
+SALVAGE_CODE = r"""
+# espner_salvage.py - keep only the usable part of an AI-generated clip.
+# numpy + opencv only. No triple double quotes in this file (it is embedded in a string).
+#
+# frame_quality(): per-frame sharpness / ghosting / structure / glasses -> good mask
+# select_usable(): longest good run, extended with an eased camera move on the last good frame
+import cv2
+import numpy as np
+
+# ---- thresholds (calibrated on refA/refB pro ads, synthetic_ghost, drive/v, synthetic LTX decay)
+TH_REL_SHARP = 0.45   # below this fraction of the segment's initial sharpness -> blurred/smeared
+TH_GHOST = 0.09       # autocorr double-edge excess above the segment start -> double exposure
+TH_GHOST_ABS = 0.25   # absolute autocorr excess (with ABS_SOFT) for clips that start already ghosted
+ABS_SOFT = 45.0       # Laplacian variance at 360 px below which a frame is 'very soft'
+TH_STRUCT = 0.10      # SSIM-like similarity to the segment anchor frame -> morph/divergence
+TH_STRUCT_LOC = 0.45  # SSIM-like similarity to frame i-2 (sudden morph jump, not a cut)
+TH_GLASSES = 0.5      # tracker overlay opacity below this -> product lost
+CUT_STRUCT = 0.25     # struct_local below this together with a big histogram change = hard cut
+TRAIL = 30            # trailing window (frames) for the sharpness reference
+LW = 360              # analysis width
+SW = 64               # structure analysis width
+GR0, GR1 = 4, 26      # ghost autocorr lag annulus (px at LW)
+
+
+def _small_gray(f, w=LW):
+    h = max(2, int(round(f.shape[0] * w / float(f.shape[1]))))
+    s = cv2.resize(f, (w, h), interpolation=cv2.INTER_AREA)
+    return cv2.cvtColor(s, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+
+def _sharp(g):
+    return float(cv2.Laplacian(g, cv2.CV_32F).var())
+
+
+_ANN = None
+
+
+def _annulus():
+    global _ANN
+    if _ANN is None:
+        yy, xx = np.mgrid[-GR1:GR1 + 1, -GR1:GR1 + 1]
+        rr = np.hypot(yy, xx)
+        _ANN = (rr >= GR0) & (rr <= GR1)
+    return _ANN
+
+
+def _ghost_ex(g):
+    # Edge doubling score. A double exposure (frame + shifted copy of itself) puts a
+    # secondary bump in the autocorrelation of the high-passed image at the shift
+    # offset (any direction, so we take the max over a lag annulus of 4..26 px).
+    # score = max over annulus of (autocorr - gaussian-smoothed autocorr), normalised by
+    # the zero-lag energy. The caller subtracts the value of the segment's first frames
+    # because textured content (pavement, fabric) has a nonzero baseline.
+    hp = g - cv2.GaussianBlur(g, (0, 0), 3)
+    hp = hp - hp.mean()
+    h, w = hp.shape
+    e0 = float((hp * hp).sum())
+    if e0 < 1e-3:
+        return 0.0
+    F = np.fft.rfft2(hp, s=(h * 2, w * 2))
+    ac = np.fft.fftshift(np.fft.irfft2(np.abs(F) ** 2, s=(h * 2, w * 2)))
+    a = (ac[h - GR1:h + GR1 + 1, w - GR1:w + GR1 + 1] / ac[h, w]).astype(np.float32)
+    ex = a - cv2.GaussianBlur(a, (0, 0), 4)
+    return float(ex[_annulus()].max())
+
+
+def _ssim(a, b):
+    # global-ish SSIM on 64 px images with a gaussian window, mean over image
+    c1, c2 = 6.5025, 58.5225
+    ma = cv2.GaussianBlur(a, (0, 0), 2)
+    mb = cv2.GaussianBlur(b, (0, 0), 2)
+    saa = cv2.GaussianBlur(a * a, (0, 0), 2) - ma * ma
+    sbb = cv2.GaussianBlur(b * b, (0, 0), 2) - mb * mb
+    sab = cv2.GaussianBlur(a * b, (0, 0), 2) - ma * mb
+    s = ((2 * ma * mb + c1) * (2 * sab + c2)) / ((ma * ma + mb * mb + c1) * (saa + sbb + c2))
+    return float(s.mean())
+
+
+def _hist_diff(a, b):
+    ha = cv2.calcHist([a.astype(np.uint8)], [0], None, [32], [0, 256]).ravel()
+    hb = cv2.calcHist([b.astype(np.uint8)], [0], None, [32], [0, 256]).ravel()
+    ha /= ha.sum() + 1e-9
+    hb /= hb.sum() + 1e-9
+    return float(0.5 * np.abs(ha - hb).sum())
+
+
+def frame_quality(frames_bgr, ref_bgr=None, glasses_opacity=None):
+    n = len(frames_bgr)
+    gs = [_small_gray(f) for f in frames_bgr]
+    sm = [cv2.resize(g, (SW, max(2, int(round(g.shape[0] * SW / float(g.shape[1]))))),
+                     interpolation=cv2.INTER_AREA) for g in gs]
+    sharp = np.array([_sharp(g) for g in gs], np.float64)
+    gex = np.array([_ghost_ex(g) for g in gs], np.float64)
+    # hard cuts (professional footage only; LTX clips are one shot): big structural AND
+    # histogram change between consecutive frames. Segments re-anchor sharp/ghost/struct.
+    seg_start = np.zeros(n, int)
+    cur = 0
+    sloc = np.ones(n)
+    for i in range(1, n):
+        s1 = _ssim(sm[i], sm[i - 1])
+        if s1 < CUT_STRUCT and _hist_diff(gs[i], gs[i - 1]) > 0.18:
+            cur = i
+        seg_start[i] = cur
+        j = max(cur, i - 2)
+        sloc[i] = _ssim(sm[i], sm[j]) if j < i else 1.0
+    rel = np.ones(n)
+    ghost = np.zeros(n)
+    struct = np.ones(n)
+    ref_sharp = None
+    ref_ex = None
+    if ref_bgr is not None:
+        rg = _small_gray(ref_bgr)
+        ref_sharp = _sharp(rg)
+        ref_ex = _ghost_ex(rg)
+    starts = sorted(set(seg_start.tolist()))
+    for k, s in enumerate(starts):
+        e = n
+        for t in starts:
+            if t > s:
+                e = t
+                break
+        idx = np.arange(s, e)
+        head = idx[:5]
+        base_s = float(np.median(sharp[head]))
+        base_e = float(np.median(gex[head]))
+        if k == 0 and ref_sharp is not None:
+            base_s = ref_sharp
+            base_e = min(base_e, ref_ex)
+        # reference = min(segment-start sharpness, trailing max over the last TRAIL frames):
+        # a fast blur-out (LTX decay) is far below its own recent past, while a slow
+        # legitimate change (zoom out, rack focus over >1 s) is forgiven.
+        for i in idx:
+            tm = float(np.max(sharp[max(s, i - TRAIL):i + 1]))
+            rel[i] = sharp[i] / max(min(base_s, tm * 1.0), 1e-6) if i - s >= 5 else sharp[i] / max(base_s, 1e-6)
+        ghost[idx] = np.maximum(0.0, gex[idx] - base_e)
+        for i in idx:
+            struct[i] = _ssim(sm[i], sm[s])
+    if glasses_opacity is None:
+        glass = np.ones(n)
+    else:
+        glass = np.asarray(glasses_opacity, np.float64).reshape(-1)[:n]
+        if len(glass) < n:
+            glass = np.concatenate([glass, np.full(n - len(glass), glass[-1] if len(glass) else 1.0)])
+    # ghost gate: an autocorr excess above the segment baseline is only damning when the
+    # frame is also softer than its past (rel<0.85); sharp frames tolerate 3x more excess
+    # (pavement/fabric texture changes). Absolute rule: a doubled AND very soft frame.
+    ghost_bad = (ghost > np.where(rel < 0.85, TH_GHOST, 3 * TH_GHOST)) | \
+                ((gex > TH_GHOST_ABS) & (sharp < ABS_SOFT))
+    # struct gate: divergence from the anchor only counts when the frame is also softer
+    # (camera moves in good footage lower SSIM-to-frame-0 while staying sharp)
+    struct_bad = (struct < TH_STRUCT) & (rel < 0.8)
+    good = ((rel >= TH_REL_SHARP) & ~ghost_bad & ~struct_bad
+            & (sloc >= TH_STRUCT_LOC) & (glass >= TH_GLASSES))
+    return {"rel_sharp": rel, "ghost": ghost, "struct": struct, "struct_local": sloc,
+            "glasses": glass, "good": good.astype(bool), "ghost_abs": gex, "sharp_abs": sharp}
+
+
+def _longest_run(good, min_len=1):
+    # longest contiguous True run; ties -> earliest start (frame 0 matches the keyframe)
+    best = None
+    i = 0
+    n = len(good)
+    while i < n:
+        if good[i]:
+            j = i
+            while j + 1 < n and good[j + 1]:
+                j += 1
+            if best is None or (j - i + 1) > (best[1] - best[0] + 1):
+                best = (i, j)
+            i = j + 1
+        else:
+            i += 1
+    return best
+
+
+def _ease(t):
+    return t * t * (3 - 2 * t)
+
+
+def camera_move(img_bgr, n, start_scale=1.0, end_scale=1.05, drift=(6.0, -4.0), t0=0.0, t1=1.0):
+    # slow eased push-in with slight drift around the image centre, n frames.
+    # t0..t1 is the eased progress range covered (so a hold can continue from a start state).
+    h, w = img_bgr.shape[:2]
+    out = []
+    for i in range(n):
+        u = t0 + (t1 - t0) * (i / float(max(1, n - 1)))
+        e = _ease(min(1.0, max(0.0, u)))
+        s = start_scale + (end_scale - start_scale) * e
+        dx = drift[0] * e * w / 720.0
+        dy = drift[1] * e * h / 1280.0
+        M = np.float32([[s, 0, (1 - s) * w / 2.0 + dx], [0, s, (1 - s) * h / 2.0 + dy]])
+        out.append(cv2.warpAffine(img_bgr, M, (w, h), flags=cv2.INTER_LINEAR,
+                                  borderMode=cv2.BORDER_REFLECT))
+    return out
+
+
+def _smooth_score(q):
+    # per-frame quality score used to pick the best window: sharpness + low ghost + structure
+    s = np.clip(q["rel_sharp"], 0, 1.2) + q["struct"] - 3.0 * q["ghost"]
+    return s
+
+
+def select_usable(frames_bgr, target_n, ref_bgr=None, glasses_opacity=None, min_good_frac=0.5):
+    n = len(frames_bgr)
+    q = frame_quality(frames_bgr, ref_bgr, glasses_opacity)
+    run = _longest_run(q["good"])
+    info = {"good_run": None, "used_ai_frames": 0, "held_frames": 0, "fallback": False,
+            "mean_rel_sharp": float(np.mean(q["rel_sharp"])) if n else 0.0,
+            "good_frac": float(q["good"].mean()) if n else 0.0}
+    base = ref_bgr if ref_bgr is not None else (frames_bgr[0] if n else None)
+    runlen = 0 if run is None else run[1] - run[0] + 1
+    # min_good_frac: if the clip is mostly bad but has a long enough run we still use it;
+    # a run shorter than 6 frames is a fallback regardless.
+    if run is None or runlen < 6:
+        info["fallback"] = True
+        info["held_frames"] = target_n
+        return camera_move(base, target_n), info
+    a, b = run
+    if runlen >= target_n:
+        sc = _smooth_score(q)
+        # prefer windows starting at/near frame a: tiny bias for earlier windows
+        best, bi = -1e9, a
+        cs = np.concatenate([[0], np.cumsum(sc)])
+        for s in range(a, b - target_n + 2):
+            m = (cs[s + target_n] - cs[s]) / target_n - 0.002 * (s - a)
+            if m > best:
+                best, bi = m, s
+        a2, b2 = bi, bi + target_n - 1
+        info.update(good_run=(a, b), window=(a2, b2), used_ai_frames=target_n)
+        out = [frames_bgr[i] for i in range(a2, b2 + 1)]
+        info["mean_rel_sharp"] = float(np.mean(q["rel_sharp"][a2:b2 + 1]))
+        return out, info
+    m = target_n - runlen
+    out = [frames_bgr[i] for i in range(a, b + 1)]
+    last = frames_bgr[b]
+    # held tail: eased push-in 1.00->1.05 (+ slight drift) from the last good frame.
+    # Eased progress starts at zero velocity, so the held frame begins still; the last
+    # 4 AI frames are cross-faded toward the held frame so the live motion dies out
+    # smoothly instead of freezing with a visible jump. No time-stretch / interpolation.
+    hold = camera_move(last, m)
+    nf = min(4, m, runlen)
+    # cross-fade: last nf AI frames mix toward the (static-start) held frame so motion
+    # inside the footage dies out gradually instead of freezing abruptly
+    for k in range(nf):
+        al = (k + 1) / float(nf + 1)
+        ai = out[len(out) - nf + k]
+        out[len(out) - nf + k] = cv2.addWeighted(ai, 1 - al, last, al, 0)
+    out.extend(hold)
+    info.update(good_run=(a, b), used_ai_frames=runlen, held_frames=m)
+    info["mean_rel_sharp"] = float(np.mean(q["rel_sharp"][a:b + 1]))
+    return out, info
+"""
+
 STAGE_3A_CODE = r"""
 import os, re, json, gc, urllib.request, urllib.parse, cv2, torch
 import numpy as np
@@ -3962,7 +4215,7 @@ cells = [
             "# ==============================================================================\n",
             "# 子程序腳本 3A：純 OpenCV 零記憶體去背 + 中英導演提示詞自動翻譯 + RealVisXL 真人模特兒生成 + 100% 原始眼鏡配戴合成\n",
             "# ==============================================================================\n",
-        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("track_code", TRACK_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
+        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("track_code", TRACK_CODE) + embed_stage("salvage_code", SALVAGE_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
             "\n",
             "# ==============================================================================\n",
             "# 子程序腳本 3B：獨立文字編碼器 (T4 原生 FP16 加速，算完即釋放 9.5GB T5 記憶體！)\n",
@@ -3976,6 +4229,7 @@ cells = [
             "\n",
             "Path(\"/content/temp/shot_plan.py\").write_text(shot_plan_code, encoding=\"utf-8\")\n",
             "Path(\"/content/temp/espner_track.py\").write_text(track_code, encoding=\"utf-8\")\n",
+            "Path(\"/content/temp/espner_salvage.py\").write_text(salvage_code, encoding=\"utf-8\")\n",
             "import glob as _glob\n",
             "for _old in _glob.glob(\"/content/temp/keyframe_shot*.png\") + _glob.glob(\"/content/temp/glasses_shot*.png\") + _glob.glob(\"/content/temp/raw_shot*.mp4\") + [\"/content/temp/glasses_meta.json\"] + [\"/content/temp/stage3c_status.json\", \"/content/temp/prompt_embeds.pt\"]:\n",
             "    if os.path.exists(_old):\n",
