@@ -1253,13 +1253,49 @@ def apply_real_glasses(sid, out_p):
     print(f"     👓 真實眼鏡逐格貼回：追蹤信心 {st.get('mean_conf', 0):.2f}｜貼回 {st.get('frames_overlaid', 0)} 格｜淡出 {st.get('frames_faded', 0)} 格")
     return st
 
+def salvage_clip(sid, out_p, glasses_opacity=None):
+    # 只保留清晰、沒變形、眼鏡追蹤穩定的連續片段；不夠長就用最後一個好畫面做慢推鏡補足 (不補幀、不拉長)
+    import espner_salvage as SV
+    cap = cv2.VideoCapture(out_p)
+    frames = []
+    while True:
+        ok, fr = cap.read()
+        if not ok:
+            break
+        frames.append(fr)
+    cap.release()
+    if not frames:
+        return None
+    n = int(round(DURS[sid] * 24))
+    ref = cv2.resize(cv2.imread(f"/content/temp/keyframe_shot{sid}.png"), (OUT_W, OUT_H), interpolation=cv2.INTER_AREA)
+    op = None
+    if glasses_opacity is not None and len(glasses_opacity) == len(frames):
+        op = np.asarray(glasses_opacity, dtype=np.float32)
+    out, info = SV.select_usable(frames, n, ref_bgr=ref, glasses_opacity=op)
+    tmp = out_p.replace(".mp4", "_salv.mp4")
+    vw = cv2.VideoWriter(tmp, cv2.VideoWriter_fourcc(*"mp4v"), 24.0, (OUT_W, OUT_H))
+    for fr in out:
+        vw.write(fr)
+    vw.release()
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", tmp, "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", out_p], check=True)
+    print(f"     ✂️ 挑選可用片段：AI 畫面 {info.get('used_ai_frames')} 格 + 補足 {info.get('held_frames')} 格 (共 {n} 格){'｜改用首幀運鏡' if info.get('fallback') else ''}")
+    return info
+
 def post_shot(sid, out_p, entry):
+    st = None
     try:
         st = apply_real_glasses(sid, out_p)
         if st:
             entry["glasses_conf"] = round(float(st.get("mean_conf", 0)), 2)
     except Exception as e:
         print(f"     ⚠️ 真實眼鏡貼回略過 ({e})")
+    try:
+        info = salvage_clip(sid, out_p, (st or {}).get("opacity"))
+        if info:
+            entry["ai_frames_used"] = int(info.get("used_ai_frames", 0))
+            entry["held_frames"] = int(info.get("held_frames", 0))
+    except Exception as e:
+        print(f"     ⚠️ 片段挑選略過 ({e})")
 
 def ltx_preprocess(img, crf):
     # LTX 以壓縮影片訓練；乾淨照片當首幀容易產生「凍結」影片 → 先經過一次 H.264 壓縮
@@ -3995,7 +4031,7 @@ cells = [
             "    with open(_st_p, \"r\", encoding=\"utf-8\") as _f:\n",
             "        _st = json.load(_f)\n",
             "    if _st.get(\"ai_ok\"):\n",
-            "        _m = \"\\n   \".join(f\"第{x['shot']}鏡：動態 {x['motion']}｜首幀相似度 {x.get('first_frame_sim', '-')}｜連續性 {x.get('continuity', '-')}｜真實眼鏡追蹤信心 {x.get('glasses_conf', '-')}\" for x in _st.get(\"shots\", []))\n",
+            "        _m = \"\\n   \".join(f\"第{x['shot']}鏡：動態 {x['motion']}｜首幀相似度 {x.get('first_frame_sim', '-')}｜連續性 {x.get('continuity', '-')}｜真實眼鏡追蹤信心 {x.get('glasses_conf', '-')}｜AI 可用 {x.get('ai_frames_used', '-')} 格、補足 {x.get('held_frames', '-')} 格\" for x in _st.get(\"shots\", []))\n",
             "        print(f\"\\n✅ AI 動態影片完成｜引擎：{_st.get('engine')}\\n   {_m}\")\n",
             "        print(\"   (motion ≥ 3 代表人物/鏡頭有明顯動作；低於 3 時已自動重試並疊加推軌運鏡)\")\n",
             "    else:\n",
