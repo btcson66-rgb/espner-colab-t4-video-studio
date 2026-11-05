@@ -998,6 +998,209 @@ def select_usable(frames_bgr, target_n, ref_bgr=None, glasses_opacity=None, min_
     return out, info
 """
 
+FACE_CODE = r"""
+# espner_face: landmark-based sunglasses placement (YuNet 5-point landmarks, Haar fallback)
+import os
+import math
+import urllib.request
+import numpy as np
+import cv2
+from PIL import Image
+
+YUNET_NAME = "face_detection_yunet_2023mar.onnx"
+YUNET_URLS = [
+    "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_detection_yunet/" + YUNET_NAME,
+    "https://raw.githubusercontent.com/opencv/opencv_zoo/main/models/face_detection_yunet/" + YUNET_NAME,
+    "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/" + YUNET_NAME,
+]
+
+# width = k * inter-pupil distance; vy = fraction of glasses height (from top) lying on the eye line
+PRODUCT_K = {
+    "aviator": {"k": 2.15, "vy": 0.48},
+    "wayfarer": {"k": 2.25, "vy": 0.46},
+    "round": {"k": 2.10, "vy": 0.50},
+    "oversized": {"k": 2.45, "vy": 0.47},
+    "default": {"k": 2.25, "vy": 0.47},
+}
+
+_DET = {}
+
+
+def _is_onnx(path):
+    try:
+        if os.path.getsize(path) < 100 * 1024:
+            return False
+        with open(path, "rb") as f:
+            head = f.read(64)
+        return not head.startswith(b"version https://git-lfs")
+    except Exception:
+        return False
+
+
+def ensure_yunet(cache_dir="/content/temp"):
+    # returns local path of the YuNet onnx, or None if it cannot be obtained
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+    except Exception:
+        cache_dir = "."
+    path = os.path.join(cache_dir, YUNET_NAME)
+    if _is_onnx(path):
+        return path
+    for url in YUNET_URLS:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = r.read()
+            if len(data) > 100 * 1024 and not data.startswith(b"version https://git-lfs"):
+                tmp = path + ".part"
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                os.replace(tmp, path)
+                if _is_onnx(path):
+                    return path
+        except Exception:
+            continue
+    return None
+
+
+def _get_detector(size):
+    path = _DET.get("path", "unset")
+    if path == "unset":
+        path = ensure_yunet(os.environ.get("ESPNER_FACE_CACHE", "/content/temp"))
+        _DET["path"] = path
+    if not path or not hasattr(cv2, "FaceDetectorYN"):
+        return None
+    try:
+        det = _DET.get("det")
+        if det is None:
+            det = cv2.FaceDetectorYN.create(path, "", size, 0.6, 0.3, 5000)
+            _DET["det"] = det
+        det.setInputSize(size)
+        return det
+    except Exception:
+        return None
+
+
+def _yunet(bgr):
+    h, w = bgr.shape[:2]
+    long_side = max(h, w)
+    # try several scales: small faces in wide shots need upscaling
+    for target in (640, 1024, 1536, 2048):
+        s = target / float(long_side)
+        if s > 2.6:
+            continue
+        sw, sh = max(32, int(round(w * s))), max(32, int(round(h * s)))
+        det = _get_detector((sw, sh))
+        if det is None:
+            return None
+        im = cv2.resize(bgr, (sw, sh), interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_CUBIC)
+        try:
+            _, faces = det.detect(im)
+        except Exception:
+            return None
+        if faces is None or len(faces) == 0:
+            continue
+        f = max(faces, key=lambda r: r[2] * r[3])
+        v = f[:14].reshape(-1).astype(np.float64) / s
+        x, y, bw, bh = v[0], v[1], v[2], v[3]
+        pts = [(v[4 + 2 * i], v[5 + 2 * i]) for i in range(5)]
+        er, el = pts[0], pts[1]
+        if er[0] > el[0]:
+            er, el = el, er
+        # sanity: frontal faces have IPD ~ 0.36-0.60 of box width and a centred nose
+        ipd = math.hypot(el[0] - er[0], el[1] - er[1])
+        if not (0.30 <= ipd / max(1.0, bw) <= 0.70) or abs(pts[2][0] - (er[0] + el[0]) / 2.0) > 0.40 * ipd:
+            continue
+        return {"box": (int(x), int(y), int(bw), int(bh)), "eye_r": er, "eye_l": el, "nose": pts[2],
+                "mouth_r": pts[3], "mouth_l": pts[4], "score": float(f[14]) if len(f) > 14 else 1.0,
+                "source": "yunet"}
+    return None
+
+
+def _haar(bgr):
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    try:
+        cas = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    except Exception:
+        return None
+    short = min(gray.shape[:2])
+    for frac in (0.20, 0.12, 0.07, 0.045):
+        m = max(24, int(short * frac))
+        faces = cas.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(m, m))
+        if len(faces) > 0:
+            fx, fy, fw, fh = [int(v) for v in sorted(faces, key=lambda b: b[2] * b[3], reverse=True)[0]]
+            ey = fy + 0.40 * fh
+            er = (fx + 0.30 * fw, ey)
+            el = (fx + 0.70 * fw, ey)
+            return {"box": (fx, fy, fw, fh), "eye_r": er, "eye_l": el, "nose": (fx + 0.5 * fw, fy + 0.62 * fh),
+                    "mouth_r": (fx + 0.35 * fw, fy + 0.80 * fh), "mouth_l": (fx + 0.65 * fw, fy + 0.80 * fh),
+                    "score": 0.5, "source": "haar"}
+    return None
+
+
+def detect_landmarks(img_rgb):
+    # largest face with 5 landmarks; YuNet first (multi-scale), Haar fallback
+    arr = np.asarray(img_rgb)
+    if arr.ndim == 3 and arr.shape[2] == 4:
+        arr = arr[:, :, :3]
+    bgr = cv2.cvtColor(np.ascontiguousarray(arr.astype(np.uint8)), cv2.COLOR_RGB2BGR)
+    try:
+        r = _yunet(bgr)
+        if r is not None:
+            return r
+    except Exception:
+        pass
+    try:
+        return _haar(bgr)
+    except Exception:
+        return None
+
+
+def glasses_placement(lm, glasses_w_px, glasses_h_px, product="aviator"):
+    cfg = PRODUCT_K.get(product, PRODUCT_K["default"])
+    er, el = lm["eye_r"], lm["eye_l"]
+    dx, dy = el[0] - er[0], el[1] - er[1]
+    ipd = math.hypot(dx, dy)
+    roll = float(np.clip(math.degrees(math.atan2(dy, dx)), -20.0, 20.0))
+    bx, by, bw, bh = lm["box"]
+    width = cfg["k"] * ipd
+    if lm.get("source") == "haar":
+        width = min(width, 0.96 * bw)
+    width = min(width, 1.05 * bw)
+    width = max(width, 8.0)
+    scale = width / float(glasses_w_px)
+    gh = glasses_h_px * scale
+    mx, my = (er[0] + el[0]) / 2.0, (er[1] + el[1]) / 2.0
+    # yaw compensation: pull centre slightly toward the nose side
+    nx = lm["nose"][0]
+    mx = mx + 0.25 * (nx - mx)
+    # centre of the un-rotated image sits (0.5 - vy) * gh below... anchor is at vy*gh from top
+    off = (cfg["vy"] - 0.5) * gh
+    a = math.radians(roll)
+    # rotated offset of the anchor relative to the image centre
+    ox, oy = -off * math.sin(a), off * math.cos(a)
+    return {"center": (mx - ox, my - oy), "width": float(width), "angle_deg": roll, "ipd": ipd,
+            "eye_mid": (mx, my)}
+
+
+def place_on_portrait(portrait_rgb, glasses_rgba_pil, product="aviator"):
+    lm = detect_landmarks(portrait_rgb)
+    if lm is None:
+        return None
+    gw0, gh0 = glasses_rgba_pil.size
+    pl = glasses_placement(lm, gw0, gh0, product)
+    tw = max(2, int(round(pl["width"])))
+    th = max(1, int(round(gh0 * tw / float(gw0))))
+    g = glasses_rgba_pil.resize((tw, th), Image.Resampling.LANCZOS)
+    if abs(pl["angle_deg"]) > 0.4:
+        g = g.rotate(-pl["angle_deg"], resample=Image.Resampling.BICUBIC, expand=True)
+    x = int(round(pl["center"][0] - g.width / 2.0))
+    y = int(round(pl["center"][1] - g.height / 2.0))
+    info = dict(pl)
+    info.update({"landmarks": lm, "source": lm["source"], "face_box": lm["box"]})
+    return x, y, g, info
+"""
+
 LENS_CODE = r"""
 # espner_lens: make a real product eyewear cutout read as WORN (reflective lenses,
 # fresnel edges, specular, metal catching light) instead of a flat sticker.
@@ -1503,13 +1706,27 @@ def composite_eyewear_on_model(portrait_pil, prod_rgba, is_closeup=False, shot_k
         face_cx = w // 2
         eye_y = int(h * (0.42 if is_closeup else 0.36))
         target_w = int(min(w, h) * (0.56 if is_closeup else 0.42))
-    target_h = max(1, int(prod_rgba.height * (target_w / prod_rgba.width)))
-    glasses_resized = prod_rgba.resize((target_w, target_h), Image.Resampling.LANCZOS)
-    if abs(angle_deg) > 0.5:
-        glasses_resized = glasses_resized.rotate(-angle_deg, resample=Image.Resampling.BICUBIC, expand=True)
+    placed = None
+    try:
+        # 精準放置：YuNet 臉部特徵點 (雙眼/鼻) → 眼鏡寬 = k x 瞳距、鏡片中心對齊眼線、依眼線傾斜
+        import espner_face as FACE
+        placed = FACE.place_on_portrait(portrait_pil.convert("RGB"), prod_rgba, product="oversized" if is_snow else "aviator")
+    except Exception as _e:
+        print(f"  ℹ️ 特徵點放置略過 ({_e})，改用臉框估計")
+    if placed is not None:
+        paste_x, paste_y, glasses_resized, _info = placed
+        paste_x, paste_y = int(paste_x), int(paste_y)
+        bx = _info.get("face_box") if isinstance(_info, dict) else None
+        if bx:
+            FACE_BOXES[shot_key] = [int(bx[0]) / w, int(bx[1]) / h, int(bx[2]) / w, int(bx[3]) / h]
+    else:
+        target_h = max(1, int(prod_rgba.height * (target_w / prod_rgba.width)))
+        glasses_resized = prod_rgba.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        if abs(angle_deg) > 0.5:
+            glasses_resized = glasses_resized.rotate(-angle_deg, resample=Image.Resampling.BICUBIC, expand=True)
+        paste_x = face_cx - glasses_resized.size[0] // 2
+        paste_y = eye_y - int(glasses_resized.size[1] * 0.48)
     gw, gh = glasses_resized.size
-    paste_x = face_cx - gw // 2
-    paste_y = eye_y - int(gh * 0.48)
     try:
         # 真實鏡片質感：鏡面反射場景 (天空/海)、上深下淺漸層、高光、金屬框受光；外型 100% 不變
         import espner_lens as LENS
@@ -5019,7 +5236,7 @@ cells = [
             "# ==============================================================================\n",
             "# 子程序腳本 3A：純 OpenCV 零記憶體去背 + 中英導演提示詞自動翻譯 + RealVisXL 真人模特兒生成 + 100% 原始眼鏡配戴合成\n",
             "# ==============================================================================\n",
-        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("track_code", TRACK_CODE) + embed_stage("salvage_code", SALVAGE_CODE) + embed_stage("lens_code", LENS_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
+        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("track_code", TRACK_CODE) + embed_stage("salvage_code", SALVAGE_CODE) + embed_stage("lens_code", LENS_CODE) + embed_stage("face_code", FACE_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
             "\n",
             "# ==============================================================================\n",
             "# 子程序腳本 3B：獨立文字編碼器 (T4 原生 FP16 加速，算完即釋放 9.5GB T5 記憶體！)\n",
@@ -5035,6 +5252,7 @@ cells = [
             "Path(\"/content/temp/espner_track.py\").write_text(track_code, encoding=\"utf-8\")\n",
             "Path(\"/content/temp/espner_salvage.py\").write_text(salvage_code, encoding=\"utf-8\")\n",
             "Path(\"/content/temp/espner_lens.py\").write_text(lens_code, encoding=\"utf-8\")\n",
+            "Path(\"/content/temp/espner_face.py\").write_text(face_code, encoding=\"utf-8\")\n",
             "import glob as _glob\n",
             "for _old in _glob.glob(\"/content/temp/keyframe_shot*.png\") + _glob.glob(\"/content/temp/glasses_shot*.png\") + _glob.glob(\"/content/temp/base_shot*.png\") + _glob.glob(\"/content/temp/raw_shot*.mp4\") + [\"/content/temp/glasses_meta.json\"] + [\"/content/temp/stage3c_status.json\", \"/content/temp/prompt_embeds.pt\"]:\n",
             "    if os.path.exists(_old):\n",
