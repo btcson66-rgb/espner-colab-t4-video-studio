@@ -711,6 +711,8 @@ TH_STRUCT = 0.10      # SSIM-like similarity to the segment anchor frame -> morp
 TH_STRUCT_LOC = 0.45  # SSIM-like similarity to frame i-2 (sudden morph jump, not a cut)
 TH_GLASSES = 0.5      # tracker overlay opacity below this -> product lost
 CUT_STRUCT = 0.25     # struct_local below this together with a big histogram change = hard cut
+PP_MIN = 12           # shortest good run that may be ping-ponged
+TURN = 4              # frames of eased speed near each turnaround
 TRAIL = 30            # trailing window (frames) for the sharpness reference
 LW = 360              # analysis width
 SW = 64               # structure analysis width
@@ -889,17 +891,59 @@ def camera_move(img_bgr, n, start_scale=1.0, end_scale=1.05, drift=(6.0, -4.0), 
     return out
 
 
+def _pingpong(run, n):
+    # Play the run forward, then backward, repeatedly (endpoints are not repeated, so no
+    # stall). Approaching a turnaround the playback speed eases from 1.0 down to 0.35
+    # over TURN frames; fractional positions are rendered as a blend of the two
+    # neighbouring frames (never more than that: no optical-flow interpolation).
+    # A slow camera move (push-in 1.00 -> 1.06 + drift) runs over the WHOLE output, so
+    # the overall motion keeps going one way while the footage reverses.
+    L = len(run)
+    pos, d = 0.0, 1.0
+    seq = []
+    for _ in range(n):
+        seq.append(pos)
+        dist = (L - 1 - pos) if d > 0 else pos
+        v = 1.0 if dist >= TURN else 0.35 + 0.65 * (dist / float(TURN))
+        pos += d * v
+        if pos >= L - 1:
+            pos = (L - 1) - (pos - (L - 1))
+            d = -1.0
+        elif pos <= 0:
+            pos = -pos
+            d = 1.0
+    h, w = run[0].shape[:2]
+    out = []
+    for i, p in enumerate(seq):
+        i0 = int(np.floor(p))
+        f = p - i0
+        if f < 1e-3 or i0 + 1 >= L:
+            fr = run[min(i0, L - 1)]
+        else:
+            fr = cv2.addWeighted(run[i0], 1 - f, run[i0 + 1], f, 0)
+        u = i / float(max(1, n - 1))
+        e = u * u * (2 - u)  # eased in, constant speed at the end (no frozen tail)
+        sc = 1.0 + 0.06 * e
+        dx = 7.0 * e * w / 720.0
+        dy = -4.0 * e * h / 1280.0
+        M = np.float32([[sc, 0, (1 - sc) * w / 2.0 + dx], [0, sc, (1 - sc) * h / 2.0 + dy]])
+        out.append(cv2.warpAffine(fr, M, (w, h), flags=cv2.INTER_LINEAR,
+                                  borderMode=cv2.BORDER_REFLECT))
+    return out
+
+
 def _smooth_score(q):
     # per-frame quality score used to pick the best window: sharpness + low ghost + structure
     s = np.clip(q["rel_sharp"], 0, 1.2) + q["struct"] - 3.0 * q["ghost"]
     return s
 
 
-def select_usable(frames_bgr, target_n, ref_bgr=None, glasses_opacity=None, min_good_frac=0.5):
+def select_usable(frames_bgr, target_n, ref_bgr=None, glasses_opacity=None, min_good_frac=0.5,
+                  extend="pingpong"):
     n = len(frames_bgr)
     q = frame_quality(frames_bgr, ref_bgr, glasses_opacity)
     run = _longest_run(q["good"])
-    info = {"good_run": None, "used_ai_frames": 0, "held_frames": 0, "fallback": False,
+    info = {"extend_mode": "none", "good_run": None, "used_ai_frames": 0, "held_frames": 0, "fallback": False,
             "mean_rel_sharp": float(np.mean(q["rel_sharp"])) if n else 0.0,
             "good_frac": float(q["good"].mean()) if n else 0.0}
     base = ref_bgr if ref_bgr is not None else (frames_bgr[0] if n else None)
@@ -926,6 +970,14 @@ def select_usable(frames_bgr, target_n, ref_bgr=None, glasses_opacity=None, min_
         info["mean_rel_sharp"] = float(np.mean(q["rel_sharp"][a2:b2 + 1]))
         return out, info
     m = target_n - runlen
+    if extend == "pingpong" and runlen >= PP_MIN:
+        run_frames = [frames_bgr[i] for i in range(a, b + 1)]
+        out = _pingpong(run_frames, target_n)
+        info.update(good_run=(a, b), used_ai_frames=runlen, held_frames=0,
+                    extend_mode="pingpong")
+        info["mean_rel_sharp"] = float(np.mean(q["rel_sharp"][a:b + 1]))
+        return out, info
+    info["extend_mode"] = "hold"
     out = [frames_bgr[i] for i in range(a, b + 1)]
     last = frames_bgr[b]
     # held tail: eased push-in 1.00->1.05 (+ slight drift) from the last good frame.
