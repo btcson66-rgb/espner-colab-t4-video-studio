@@ -1101,33 +1101,87 @@ def _estimate_light(scene, x0, y0, x1, y1):
     return v / max(np.linalg.norm(v), 1e-3)
 
 
+def _person_mask(sm, cx, cy, gw, gh):
+    # generous subject mask (low-res coords): face+hair ellipse, torso block, skin tones
+    h, w = sm.shape[:2]
+    pm = np.zeros((h, w), np.uint8)
+    cv2.ellipse(pm, (int(cx), int(cy + 0.15 * gw)), (int(0.95 * gw), int(1.55 * gw)), 0, 0, 360, 1, -1)
+    y_t = int(cy + 0.6 * gw)
+    pm[max(0, y_t):, int(max(0, cx - 1.5 * gw)):int(min(w, cx + 1.5 * gw))] = 1
+    ycc = cv2.cvtColor(sm, cv2.COLOR_RGB2YCrCb)
+    skin = ((ycc[..., 1] > 133) & (ycc[..., 1] < 180) & (ycc[..., 2] > 77) & (ycc[..., 2] < 135)).astype(np.uint8)
+    k = max(3, int(0.12 * gw)) | 1
+    skin = cv2.dilate(skin, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    return (pm | skin) > 0
+
+
 def _env_strip(scene, paste_x, paste_y, gw, gh):
+    # background-only environment: never contains the subject. Low-res (scale f).
     H, W = scene.shape[:2]
-    ya = int(max(0, paste_y - 3.0 * gh))
-    yb = int(min(H, paste_y + 6.5 * gh))
-    xl = int(max(0, paste_x - 0.15 * gw))
-    xr = int(min(W, paste_x + 1.15 * gw))
-    parts = [p for p in (scene[ya:yb, :xl], scene[ya:yb, xr:]) if p.shape[1] > 0]
-    E = np.concatenate(parts, axis=1) if parts else scene[ya:yb]
-    if E.shape[1] < gw:
-        E = scene[ya:yb]
-    cy = (paste_y + 2.1 * gh - ya) / max(1, (yb - ya))
-    # horizon / strongest tonal step (sea vs sky, street vs buildings): put it mid-lens so the
-    # reflection has the light-above / dark-below structure of real mirror lenses
-    rows = cv2.GaussianBlur(E.mean(2).mean(1).astype(np.float32).reshape(-1, 1), (1, 0), max(1.5, 0.05 * E.shape[0])).ravel()
-    if len(rows) > 12:
-        d = rows[6:] - rows[:-6]
-        lo = int(0.25 * len(d))
+    f = min(1.0, 96.0 / W)
+    sm = cv2.resize(scene.astype(np.uint8), (max(8, int(W * f)), max(8, int(H * f))), interpolation=cv2.INTER_AREA).astype(np.float32)
+    h, w = sm.shape[:2]
+    cx, cy = (paste_x + 0.5 * gw) * f, (paste_y + 0.5 * gh) * f
+    person = _person_mask(sm.astype(np.uint8), cx, cy, gw * f, gh * f)
+    valid = (~person).astype(np.float32)
+    nval = float(valid.sum())
+    rows = np.arange(h)[:, None]
+    # --- colour statistics of the visible background
+    if nval > 0.015 * w * h:
+        lum = sm.mean(2)
+        vm = valid > 0
+        top = vm & (rows < 0.45 * h)
+        low = vm & (rows >= 0.45 * h)
+        zt = top if top.sum() > 30 else vm
+        zl = low if low.sum() > 30 else vm
+        lt = lum[zt]; sky = sm[zt][lt >= np.percentile(lt, 55)].mean(0)
+        ll = lum[zl]; ground = sm[zl][ll <= np.percentile(ll, 45)].mean(0)
+        if low.sum() <= 30:
+            ground = ground * 0.55
+    else:
+        light = scene[::8, ::8].reshape(-1, 3).mean(0)
+        sky = np.clip(light * 1.2 + np.array([-6.0, 2.0, 14.0]), 0, 255)
+        ground = sky * 0.45
+    # --- synthetic environment: sky gradient over a horizon with a darker ground/sea band
+    yy = np.linspace(0, 1, h, dtype=np.float32)[:, None, None]
+    hor = 0.58
+    sky_g = sky[None, None, :] * (0.92 + 0.16 * np.clip(yy / hor, 0, 1))
+    gnd_g = ground[None, None, :] * (1.1 - 0.35 * np.clip((yy - hor) / (1 - hor), 0, 1))
+    t = np.clip((yy - hor) / 0.03 + 0.5, 0, 1)
+    synth = sky_g * (1 - t) + gnd_g * t
+    rs = np.random.RandomState(3)
+    blobs = cv2.GaussianBlur(rs.randn(h, w).astype(np.float32), (0, 0), max(2.0, 0.08 * w))
+    synth = synth * (1.0 + 0.5 * blobs / max(float(blobs.std()), 1e-4) * 0.10)[..., None]
+    # --- real background where visible, hole-filled by normalised convolution, then synthetic
+    res = sm * valid[..., None]
+    remain = 1.0 - valid
+    for sg in (0.06, 0.2, 0.6):
+        sig = max(1.5, sg * w)
+        den = cv2.GaussianBlur(valid, (0, 0), sig)
+        num = cv2.GaussianBlur(sm * valid[..., None], (0, 0), sig)
+        est = num / np.maximum(den, 1e-4)[..., None]
+        c = np.clip(den * 4.0 - 0.3, 0, 1)
+        res = res + (remain * c)[..., None] * est
+        remain = remain * (1 - c)
+    res = res + remain[..., None] * synth
+    # soft structure only: the strip is a blurry reflection source, never a crisp copy
+    res = cv2.GaussianBlur(res, (0, 0), max(1.0, 0.012 * w))
+    cyf = (paste_y * f + 2.1 * gh * f) / float(h)
+    # horizon / strongest tonal step: place it mid-lens (light above / dark below)
+    rws = cv2.GaussianBlur(res.mean(2).mean(1).astype(np.float32).reshape(-1, 1), (1, 0), max(1.5, 0.03 * h)).ravel()
+    if len(rws) > 12:
+        d = rws[6:] - rws[:-6]
+        lo = int(0.2 * len(d))
         j = lo + int(np.argmax(np.abs(d[lo:])))
         if abs(d[j]) > 18:
-            cy = (j + 3) / float(len(rows)) - 0.04
-    return E[:, ::-1].copy(), float(np.clip(cy, 0.1, 0.9))
+            cyf = (j + 3) / float(len(rws)) - 0.04
+    return res[:, ::-1].copy().astype(np.float32), float(np.clip(cyf, 0.1, 0.9)), f
 
 
-def _lens_env(E, cy_frac, cx_frac, lw, lh):
+def _lens_env(E, cy_frac, cx_frac, lw, lh, f=1.0):
     # perspective-ish window of the environment mapped on a convex (spherical) lens
     Eh, Ew = E.shape[:2]
-    win_w = min(float(Ew), 3.3 * lw)
+    win_w = min(float(Ew), 3.3 * lw * f)
     win_h = win_w * lh / lw * 1.05
     if win_h > Eh:
         win_h = float(Eh)
@@ -1141,8 +1195,10 @@ def _lens_env(E, cy_frac, cx_frac, lw, lh):
     bulge = 1.0 + 0.55 * r2
     # slight vertical tilt (keystone) so the horizon curves like in a curved mirror
     mx = (cx + nx * bulge * win_w / 2).astype(np.float32)
+    
     my = (cy + ny * bulge * win_h / 2 + 0.06 * win_h * nx * nx).astype(np.float32)
     out = cv2.remap(E, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    out = cv2.resize(out, (lw, lh), interpolation=cv2.INTER_LINEAR)
     return cv2.GaussianBlur(out, (0, 0), 1.0 + lw / 70.0)
 
 
@@ -1163,8 +1219,10 @@ def render_worn_glasses(portrait_rgb, glasses_rgba, paste_x, paste_y, strength=1
     x1, y1 = min(W, paste_x + gw + pad_x), min(H, paste_y + gh + pad_y)
     if x1 - x0 < 4 or y1 - y0 < 4:
         x0, y0, x1, y1 = 0, 0, W, H
-    local = scene[y0:y1, x0:x1].reshape(-1, 3)
-    light = 0.6 * local.mean(0) + 0.4 * scene.reshape(-1, 3).mean(0)
+    sc4 = np.ascontiguousarray(scene[::4, ::4])          # cheap statistics only
+    lx0, ly0, lx1, ly1 = x0 // 4, y0 // 4, max(x0 // 4 + 2, x1 // 4), max(y0 // 4 + 2, y1 // 4)
+    local = sc4[ly0:ly1, lx0:lx1].reshape(-1, 3)
+    light = 0.6 * local.mean(0) + 0.4 * sc4.reshape(-1, 3).mean(0)
     tint = 1.0 + 0.45 * (np.clip(light / max(1e-3, light.mean()), 0.78, 1.25) - 1.0)
     prod_l = float(rgb[solid].mean()) if solid.any() else 128.0
     expo = float(np.clip((float(local.mean()) / max(prod_l, 1.0)) ** 0.30, 0.74, 1.04))
@@ -1182,14 +1240,14 @@ def render_worn_glasses(portrait_rgb, glasses_rgba, paste_x, paste_y, strength=1
 
     out = base.copy()
     lensf = lm[..., None]
-    light_dir = _estimate_light(scene, x0, y0, x1, y1)
+    light_dir = _estimate_light(sc4, lx0, ly0, lx1, ly1)
 
     # ---- 2) lens environment reflection
     n, lbl, stats, cents = cv2.connectedComponentsWithStats((lm > 0.35).astype(np.uint8), connectivity=8)
     comps = sorted(range(1, n), key=lambda i: -stats[i, cv2.CC_STAT_AREA])[:2]
     comps = [i for i in comps if stats[i, cv2.CC_STAT_AREA] > 0.02 * gw * gh]
     comps.sort(key=lambda i: cents[i][0])
-    E, cy_frac = _env_strip(scene, paste_x, paste_y, gw, gh)
+    E, cy_frac, f_env = _env_strip(scene, paste_x, paste_y, gw, gh)
     env_full = np.zeros_like(base)
     spec = np.zeros((gh, gw), np.float32)
     shade = np.ones((gh, gw), np.float32)
@@ -1198,7 +1256,7 @@ def render_worn_glasses(portrait_rgb, glasses_rgba, paste_x, paste_y, strength=1
     for k, i in enumerate(comps):
         bx, by, bw, bh = stats[i, 0], stats[i, 1], stats[i, 2], stats[i, 3]
         cxf = 0.30 if len(comps) == 2 and k == 0 else (0.70 if len(comps) == 2 else 0.5)
-        env = _lens_env(E, cy_frac, cxf, bw, bh)
+        env = _lens_env(E, cy_frac, cxf, bw, bh, f_env)
         mean_l = float(env.mean())
         gain = float(np.clip(105.0 / max(mean_l, 1.0), 1.0, 1.9)) if m > 0.4 else 1.0
         # crisp-ify + contrast around the mean (mirrors are punchy)
@@ -1250,7 +1308,7 @@ def render_worn_glasses(portrait_rgb, glasses_rgba, paste_x, paste_y, strength=1
     out = out + (255.0 - out) * np.clip(hl, 0, 0.9)
 
     # ---- 5) grain matched to portrait, softer alpha edge
-    gray = cv2.cvtColor(scene.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    gray = cv2.cvtColor(scene[y0:y1, x0:x1].astype(np.uint8), cv2.COLOR_RGB2GRAY)
     sigma = float(np.clip(cv2.Laplacian(gray, cv2.CV_32F).std() / 18.0, 0.8, 3.5))
     out = out + np.random.RandomState(7).normal(0, sigma, out.shape).astype(np.float32)
     a2 = cv2.GaussianBlur(a.astype(np.float32), (3, 3), 0.7)
