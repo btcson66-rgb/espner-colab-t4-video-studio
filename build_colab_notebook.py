@@ -406,10 +406,60 @@ def _make_mask(M_full, roi, excl, shape_half, s):
 
 
 def _sharp(gray, mask):
-    lap = cv2.Laplacian(cv2.GaussianBlur(gray, (3, 3), 0), cv2.CV_16S, ksize=3)
-    v = np.abs(lap)
-    sel = mask > 0
-    return float(v[sel].mean()) + 1e-6 if sel.any() else 1e-6
+    x, y, w, h = cv2.boundingRect(mask)
+    if w < 4 or h < 4:
+        return 1e-6
+    g = gray[y:y + h, x:x + w]
+    m = mask[y:y + h, x:x + w] > 0
+    lap = cv2.Laplacian(cv2.GaussianBlur(g, (3, 3), 0), cv2.CV_16S, ksize=3)
+    return float(np.abs(lap)[m].mean()) + 1e-6 if m.any() else 1e-6
+
+
+def _scene_stats(frame, gray_half, mask_half):
+    # mean BGR colour and noise sigma (full-res px) of the face/background ring
+    x, y, w, h = cv2.boundingRect(mask_half)
+    if w < 8 or h < 8:
+        return None, None
+    m = mask_half[y:y + h, x:x + w]
+    st = 4
+    # strided sample of the colour frame (cheap; thousands of px per channel)
+    sub = frame[2 * y:2 * (y + h):2 * st, 2 * x:2 * (x + w):2 * st]
+    msub = m[::st, ::st]
+    msub = msub[:sub.shape[0], :sub.shape[1]]
+    sub = sub[:msub.shape[0], :msub.shape[1]]
+    if msub.sum() == 0:
+        return None, None
+    col = np.array(cv2.mean(sub, msub)[:3], np.float64)
+    g = gray_half[y:y + h, x:x + w]
+    res = g.astype(np.float32) - cv2.GaussianBlur(g, (0, 0), 1.0).astype(np.float32)
+    v = np.abs(res[m > 0][::5])
+    noise = float(np.median(v)) * 1.4826 * 1.2 if len(v) else 0.0
+    return col, noise
+
+
+def _smooth_series(x, alpha=0.3):
+    # x: N x D with NaN holes -> ffill/bfill, then zero-phase EMA
+    x = np.array(x, np.float64)
+    if x.ndim == 1:
+        x = x[:, None]
+    for d in range(x.shape[1]):
+        v = x[:, d]
+        ok = ~np.isnan(v)
+        if not ok.any():
+            v[:] = 0
+            continue
+        idx = np.where(ok, np.arange(len(v)), 0)
+        np.maximum.accumulate(idx, out=idx)
+        v[:] = v[idx]
+        first = np.argmax(ok)
+        v[:first] = v[first]
+    f = x.copy()
+    for i in range(1, len(f)):
+        f[i] = alpha * x[i] + (1 - alpha) * f[i - 1]
+    b = x.copy()
+    for i in range(len(b) - 2, -1, -1):
+        b[i] = alpha * x[i] + (1 - alpha) * b[i + 1]
+    return 0.5 * (f + b)
 
 
 def _fit(p0, p1, thr=2.0):
@@ -486,7 +536,7 @@ def _cleanup_patch(bg8, a_full, ring_r):
 
 
 def _composite_patch(frame, pm4, M_tot, opacity, shadow_sigma, shadow_dy, shadow_op, corners,
-                     ring_r=0):
+                     ring_r=0, blur=0.0, gain=None, grain=0.0, tile=None, rng=None):
     H, W = frame.shape[:2]
     mg = int(3 * shadow_sigma + shadow_dy + 3 + ring_r * 1.8 + 3)
     xs, ys = corners[:, 0], corners[:, 1]
@@ -501,6 +551,20 @@ def _composite_patch(frame, pm4, M_tot, opacity, shadow_sigma, shadow_dy, shadow
     Mp[1, 2] -= y0
     pw = cv2.warpAffine(pm4, Mp, (x1 - x0, y1 - y0), flags=cv2.INTER_LINEAR,
                         borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
+    # match the scene: soften (premultiplied blur is fringe-free), exposure/WB gain, grain
+    if blur > 0.25:
+        pw = cv2.GaussianBlur(pw, (0, 0), float(blur))
+    if gain is not None:
+        pw[:, :, :3] *= np.asarray(gain, np.float32)[None, None, :]
+    if grain > 0.05 and tile is not None:
+        ph, pwid = pw.shape[:2]
+        th, tw = tile.shape
+        oy = int(rng.randint(0, max(1, th - ph))) if th > ph else 0
+        ox = int(rng.randint(0, max(1, tw - pwid))) if tw > pwid else 0
+        nz = tile[oy:oy + ph, ox:ox + pwid]
+        if nz.shape != (ph, pwid):
+            nz = np.resize(nz, (ph, pwid))
+        pw[:, :, :3] += (nz * float(grain))[:, :, None] * pw[:, :, 3:4]
     a = pw[:, :, 3]
     sh = cv2.GaussianBlur(a, (0, 0), shadow_sigma)
     dy = int(round(shadow_dy))
@@ -517,8 +581,11 @@ def _composite_patch(frame, pm4, M_tot, opacity, shadow_sigma, shadow_dy, shadow
 
 
 def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
-                        min_conf=0.35, debug=False, cleanup=True):
+                        min_conf=0.35, debug=False, cleanup=None, match_frame=True,
+                        glasses_free_source=False):
     t_start = time.time()
+    if cleanup is None:
+        cleanup = not glasses_free_source
     n = len(frames)
     H, W = frames[0].shape[:2]
     gh, gw = glasses_rgba.shape[:2]
@@ -539,6 +606,14 @@ def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
     I = np.array([[1, 0, 0], [0, 1, 0]], np.float64)
     mask0 = _make_mask(I, roi, excl, (hh, ww), s)
     sharp0 = _sharp(g0, mask0)
+    col0, noise0 = _scene_stats(frames[0], g0, mask0)
+    meas_r = np.full(n, np.nan)
+    meas_col = np.full((n, 3), np.nan)
+    meas_nz = np.full(n, np.nan)
+    meas_r[0] = 1.0
+    if col0 is not None:
+        meas_col[0] = col0
+        meas_nz[0] = noise0
     anchor_pts = _detect(g0, mask0, 200)
     p0 = anchor_pts.copy()          # frame-0 coords of live tracks (half res)
     p_prev = anchor_pts.copy()      # their positions in previous frame
@@ -557,6 +632,7 @@ def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
         M_h = None
         inl_mask = None
         n_in, ratio, err = 0, 0.0, 9.0
+        sh_r = None
         if len(p_prev) >= 4:
             pb, ok = _lk_fb(g_prev, g, p_prev, 1.0)
             if ok.sum() >= 4:
@@ -605,13 +681,19 @@ def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
             M_full_try[:, 2] /= s
             m_try = _make_mask(M_full_try, roi, excl, (hh, ww), s)
             sh_r = _sharp(g, m_try) / sharp0
-            c_s = np.clip((sh_r - 0.25) / 0.35, 0, 1)
+            c_s = np.clip((sh_r - 0.10) / 0.25, 0, 1)
             c = float(c_n * c_r * c_e * c_s) if sane else 0.0
             ninl[i], reproj[i] = n_in, err
         conf[i] = c
         if M_h is not None and c >= 0.15:
             Ms_half = M_h
             last_good_i = i
+            if match_frame and sh_r is not None:
+                col_i, nz_i = _scene_stats(frames[i], g, m_try)
+                if col_i is not None:
+                    meas_r[i] = sh_r
+                    meas_col[i] = col_i
+                    meas_nz[i] = nz_i
         # keep track set healthy (only when pose is trustworthy)
         if c >= 0.5 and len(p_prev) < 70:
             M_full_c = Ms_half.copy()
@@ -653,6 +735,24 @@ def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
         cur = min(1.0, cur + step) if tgt >= 0.5 else max(0.0, cur - step)
         opac[i] = cur
 
+    # ---------------- scene matching params (blur / gain / grain per frame) ----------------
+    blur_s = np.zeros(n)
+    gains = np.ones((n, 3))
+    grains = np.zeros(n)
+    if match_frame:
+        r_s = np.clip(_smooth_series(meas_r)[:, 0], 0.02, 1.0)
+        sig_half = np.sqrt(np.maximum(1.0 / r_s - 1.0, 0.0))
+        blur_s = np.minimum(2.0 * sig_half, 3.0 * W / 720.0)
+        blur_s[blur_s < 0.3] = 0.0
+        if col0 is not None:
+            cs = _smooth_series(meas_col)
+            gains = np.clip(cs / np.maximum(cs[0], 1.0), 0.7, 1.3)
+            gains[0] = 1.0
+            nz = _smooth_series(meas_nz)[:, 0]
+            grains = np.clip(0.6 * nz, 0.0, 4.0)
+    tile = np.random.RandomState(7).randn(1024, 1024).astype(np.float32) if match_frame else None
+    trng = np.random.RandomState(11)
+
     # ---------------- composite ----------------
     g = glasses_rgba
     if g.shape[2] == 3:
@@ -673,7 +773,11 @@ def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
         corners = _apply(T, corners0)
         fr = _composite_patch(frames[i], pm4, M_tot, float(opac[i]), shadow_sigma,
                               shadow_dy, 0.25, corners,
-                              ring_r=(0.12 * gw * float(np.sqrt(abs(np.linalg.det(T[:, :2]))))) if cleanup else 0)
+                              ring_r=(0.12 * gw * float(np.sqrt(abs(np.linalg.det(T[:, :2]))))) if cleanup else 0,
+                              blur=float(blur_s[i]) if match_frame else 0.0,
+                              gain=gains[i] if match_frame else None,
+                              grain=float(grains[i]) if match_frame else 0.0,
+                              tile=tile, rng=trng)
         if debug:
             cv2.polylines(fr, [corners.astype(np.int32)], True, (0, 255, 0), 1)
             cv2.putText(fr, "c=%.2f o=%.2f" % (conf[i], opac[i]), (10, 30),
@@ -689,6 +793,7 @@ def recomposite_glasses(frames, glasses_rgba, paste_x, paste_y, face_box=None,
         "ms_per_frame": 1000.0 * el / n,
         "conf": conf, "opacity": opac, "inliers": ninl, "reproj_err": reproj,
         "transforms": Ms, "transforms_raw": Ms_full,
+        "match_blur": blur_s, "match_gain": gains, "match_grain": grains,
     }
     return out, stats
 """
@@ -998,6 +1103,209 @@ def select_usable(frames_bgr, target_n, ref_bgr=None, glasses_opacity=None, min_
     return out, info
 """
 
+FACE_CODE = r"""
+# espner_face: landmark-based sunglasses placement (YuNet 5-point landmarks, Haar fallback)
+import os
+import math
+import urllib.request
+import numpy as np
+import cv2
+from PIL import Image
+
+YUNET_NAME = "face_detection_yunet_2023mar.onnx"
+YUNET_URLS = [
+    "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_detection_yunet/" + YUNET_NAME,
+    "https://raw.githubusercontent.com/opencv/opencv_zoo/main/models/face_detection_yunet/" + YUNET_NAME,
+    "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/" + YUNET_NAME,
+]
+
+# width = k * inter-pupil distance; vy = fraction of glasses height (from top) lying on the eye line
+PRODUCT_K = {
+    "aviator": {"k": 2.15, "vy": 0.48},
+    "wayfarer": {"k": 2.25, "vy": 0.46},
+    "round": {"k": 2.10, "vy": 0.50},
+    "oversized": {"k": 2.45, "vy": 0.47},
+    "default": {"k": 2.25, "vy": 0.47},
+}
+
+_DET = {}
+
+
+def _is_onnx(path):
+    try:
+        if os.path.getsize(path) < 100 * 1024:
+            return False
+        with open(path, "rb") as f:
+            head = f.read(64)
+        return not head.startswith(b"version https://git-lfs")
+    except Exception:
+        return False
+
+
+def ensure_yunet(cache_dir="/content/temp"):
+    # returns local path of the YuNet onnx, or None if it cannot be obtained
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+    except Exception:
+        cache_dir = "."
+    path = os.path.join(cache_dir, YUNET_NAME)
+    if _is_onnx(path):
+        return path
+    for url in YUNET_URLS:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = r.read()
+            if len(data) > 100 * 1024 and not data.startswith(b"version https://git-lfs"):
+                tmp = path + ".part"
+                with open(tmp, "wb") as f:
+                    f.write(data)
+                os.replace(tmp, path)
+                if _is_onnx(path):
+                    return path
+        except Exception:
+            continue
+    return None
+
+
+def _get_detector(size):
+    path = _DET.get("path", "unset")
+    if path == "unset":
+        path = ensure_yunet(os.environ.get("ESPNER_FACE_CACHE", "/content/temp"))
+        _DET["path"] = path
+    if not path or not hasattr(cv2, "FaceDetectorYN"):
+        return None
+    try:
+        det = _DET.get("det")
+        if det is None:
+            det = cv2.FaceDetectorYN.create(path, "", size, 0.6, 0.3, 5000)
+            _DET["det"] = det
+        det.setInputSize(size)
+        return det
+    except Exception:
+        return None
+
+
+def _yunet(bgr):
+    h, w = bgr.shape[:2]
+    long_side = max(h, w)
+    # try several scales: small faces in wide shots need upscaling
+    for target in (640, 1024, 1536, 2048):
+        s = target / float(long_side)
+        if s > 2.6:
+            continue
+        sw, sh = max(32, int(round(w * s))), max(32, int(round(h * s)))
+        det = _get_detector((sw, sh))
+        if det is None:
+            return None
+        im = cv2.resize(bgr, (sw, sh), interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_CUBIC)
+        try:
+            _, faces = det.detect(im)
+        except Exception:
+            return None
+        if faces is None or len(faces) == 0:
+            continue
+        f = max(faces, key=lambda r: r[2] * r[3])
+        v = f[:14].reshape(-1).astype(np.float64) / s
+        x, y, bw, bh = v[0], v[1], v[2], v[3]
+        pts = [(v[4 + 2 * i], v[5 + 2 * i]) for i in range(5)]
+        er, el = pts[0], pts[1]
+        if er[0] > el[0]:
+            er, el = el, er
+        # sanity: frontal faces have IPD ~ 0.36-0.60 of box width and a centred nose
+        ipd = math.hypot(el[0] - er[0], el[1] - er[1])
+        if not (0.30 <= ipd / max(1.0, bw) <= 0.70) or abs(pts[2][0] - (er[0] + el[0]) / 2.0) > 0.40 * ipd:
+            continue
+        return {"box": (int(x), int(y), int(bw), int(bh)), "eye_r": er, "eye_l": el, "nose": pts[2],
+                "mouth_r": pts[3], "mouth_l": pts[4], "score": float(f[14]) if len(f) > 14 else 1.0,
+                "source": "yunet"}
+    return None
+
+
+def _haar(bgr):
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    try:
+        cas = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    except Exception:
+        return None
+    short = min(gray.shape[:2])
+    for frac in (0.20, 0.12, 0.07, 0.045):
+        m = max(24, int(short * frac))
+        faces = cas.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(m, m))
+        if len(faces) > 0:
+            fx, fy, fw, fh = [int(v) for v in sorted(faces, key=lambda b: b[2] * b[3], reverse=True)[0]]
+            ey = fy + 0.40 * fh
+            er = (fx + 0.30 * fw, ey)
+            el = (fx + 0.70 * fw, ey)
+            return {"box": (fx, fy, fw, fh), "eye_r": er, "eye_l": el, "nose": (fx + 0.5 * fw, fy + 0.62 * fh),
+                    "mouth_r": (fx + 0.35 * fw, fy + 0.80 * fh), "mouth_l": (fx + 0.65 * fw, fy + 0.80 * fh),
+                    "score": 0.5, "source": "haar"}
+    return None
+
+
+def detect_landmarks(img_rgb):
+    # largest face with 5 landmarks; YuNet first (multi-scale), Haar fallback
+    arr = np.asarray(img_rgb)
+    if arr.ndim == 3 and arr.shape[2] == 4:
+        arr = arr[:, :, :3]
+    bgr = cv2.cvtColor(np.ascontiguousarray(arr.astype(np.uint8)), cv2.COLOR_RGB2BGR)
+    try:
+        r = _yunet(bgr)
+        if r is not None:
+            return r
+    except Exception:
+        pass
+    try:
+        return _haar(bgr)
+    except Exception:
+        return None
+
+
+def glasses_placement(lm, glasses_w_px, glasses_h_px, product="aviator"):
+    cfg = PRODUCT_K.get(product, PRODUCT_K["default"])
+    er, el = lm["eye_r"], lm["eye_l"]
+    dx, dy = el[0] - er[0], el[1] - er[1]
+    ipd = math.hypot(dx, dy)
+    roll = float(np.clip(math.degrees(math.atan2(dy, dx)), -20.0, 20.0))
+    bx, by, bw, bh = lm["box"]
+    width = cfg["k"] * ipd
+    if lm.get("source") == "haar":
+        width = min(width, 0.96 * bw)
+    width = min(width, 1.05 * bw)
+    width = max(width, 8.0)
+    scale = width / float(glasses_w_px)
+    gh = glasses_h_px * scale
+    mx, my = (er[0] + el[0]) / 2.0, (er[1] + el[1]) / 2.0
+    # yaw compensation: pull centre slightly toward the nose side
+    nx = lm["nose"][0]
+    mx = mx + 0.25 * (nx - mx)
+    # centre of the un-rotated image sits (0.5 - vy) * gh below... anchor is at vy*gh from top
+    off = (cfg["vy"] - 0.5) * gh
+    a = math.radians(roll)
+    # rotated offset of the anchor relative to the image centre
+    ox, oy = -off * math.sin(a), off * math.cos(a)
+    return {"center": (mx - ox, my - oy), "width": float(width), "angle_deg": roll, "ipd": ipd,
+            "eye_mid": (mx, my)}
+
+
+def place_on_portrait(portrait_rgb, glasses_rgba_pil, product="aviator"):
+    lm = detect_landmarks(portrait_rgb)
+    if lm is None:
+        return None
+    gw0, gh0 = glasses_rgba_pil.size
+    pl = glasses_placement(lm, gw0, gh0, product)
+    tw = max(2, int(round(pl["width"])))
+    th = max(1, int(round(gh0 * tw / float(gw0))))
+    g = glasses_rgba_pil.resize((tw, th), Image.Resampling.LANCZOS)
+    if abs(pl["angle_deg"]) > 0.4:
+        g = g.rotate(-pl["angle_deg"], resample=Image.Resampling.BICUBIC, expand=True)
+    x = int(round(pl["center"][0] - g.width / 2.0))
+    y = int(round(pl["center"][1] - g.height / 2.0))
+    info = dict(pl)
+    info.update({"landmarks": lm, "source": lm["source"], "face_box": lm["box"]})
+    return x, y, g, info
+"""
+
 LENS_CODE = r"""
 # espner_lens: make a real product eyewear cutout read as WORN (reflective lenses,
 # fresnel edges, specular, metal catching light) instead of a flat sticker.
@@ -1101,33 +1409,87 @@ def _estimate_light(scene, x0, y0, x1, y1):
     return v / max(np.linalg.norm(v), 1e-3)
 
 
+def _person_mask(sm, cx, cy, gw, gh):
+    # generous subject mask (low-res coords): face+hair ellipse, torso block, skin tones
+    h, w = sm.shape[:2]
+    pm = np.zeros((h, w), np.uint8)
+    cv2.ellipse(pm, (int(cx), int(cy + 0.15 * gw)), (int(0.95 * gw), int(1.55 * gw)), 0, 0, 360, 1, -1)
+    y_t = int(cy + 0.6 * gw)
+    pm[max(0, y_t):, int(max(0, cx - 1.5 * gw)):int(min(w, cx + 1.5 * gw))] = 1
+    ycc = cv2.cvtColor(sm, cv2.COLOR_RGB2YCrCb)
+    skin = ((ycc[..., 1] > 133) & (ycc[..., 1] < 180) & (ycc[..., 2] > 77) & (ycc[..., 2] < 135)).astype(np.uint8)
+    k = max(3, int(0.12 * gw)) | 1
+    skin = cv2.dilate(skin, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    return (pm | skin) > 0
+
+
 def _env_strip(scene, paste_x, paste_y, gw, gh):
+    # background-only environment: never contains the subject. Low-res (scale f).
     H, W = scene.shape[:2]
-    ya = int(max(0, paste_y - 3.0 * gh))
-    yb = int(min(H, paste_y + 6.5 * gh))
-    xl = int(max(0, paste_x - 0.15 * gw))
-    xr = int(min(W, paste_x + 1.15 * gw))
-    parts = [p for p in (scene[ya:yb, :xl], scene[ya:yb, xr:]) if p.shape[1] > 0]
-    E = np.concatenate(parts, axis=1) if parts else scene[ya:yb]
-    if E.shape[1] < gw:
-        E = scene[ya:yb]
-    cy = (paste_y + 2.1 * gh - ya) / max(1, (yb - ya))
-    # horizon / strongest tonal step (sea vs sky, street vs buildings): put it mid-lens so the
-    # reflection has the light-above / dark-below structure of real mirror lenses
-    rows = cv2.GaussianBlur(E.mean(2).mean(1).astype(np.float32).reshape(-1, 1), (1, 0), max(1.5, 0.05 * E.shape[0])).ravel()
-    if len(rows) > 12:
-        d = rows[6:] - rows[:-6]
-        lo = int(0.25 * len(d))
+    f = min(1.0, 96.0 / W)
+    sm = cv2.resize(scene.astype(np.uint8), (max(8, int(W * f)), max(8, int(H * f))), interpolation=cv2.INTER_AREA).astype(np.float32)
+    h, w = sm.shape[:2]
+    cx, cy = (paste_x + 0.5 * gw) * f, (paste_y + 0.5 * gh) * f
+    person = _person_mask(sm.astype(np.uint8), cx, cy, gw * f, gh * f)
+    valid = (~person).astype(np.float32)
+    nval = float(valid.sum())
+    rows = np.arange(h)[:, None]
+    # --- colour statistics of the visible background
+    if nval > 0.015 * w * h:
+        lum = sm.mean(2)
+        vm = valid > 0
+        top = vm & (rows < 0.45 * h)
+        low = vm & (rows >= 0.45 * h)
+        zt = top if top.sum() > 30 else vm
+        zl = low if low.sum() > 30 else vm
+        lt = lum[zt]; sky = sm[zt][lt >= np.percentile(lt, 55)].mean(0)
+        ll = lum[zl]; ground = sm[zl][ll <= np.percentile(ll, 45)].mean(0)
+        if low.sum() <= 30:
+            ground = ground * 0.55
+    else:
+        light = scene[::8, ::8].reshape(-1, 3).mean(0)
+        sky = np.clip(light * 1.2 + np.array([-6.0, 2.0, 14.0]), 0, 255)
+        ground = sky * 0.45
+    # --- synthetic environment: sky gradient over a horizon with a darker ground/sea band
+    yy = np.linspace(0, 1, h, dtype=np.float32)[:, None, None]
+    hor = 0.58
+    sky_g = sky[None, None, :] * (0.92 + 0.16 * np.clip(yy / hor, 0, 1))
+    gnd_g = ground[None, None, :] * (1.1 - 0.35 * np.clip((yy - hor) / (1 - hor), 0, 1))
+    t = np.clip((yy - hor) / 0.03 + 0.5, 0, 1)
+    synth = sky_g * (1 - t) + gnd_g * t
+    rs = np.random.RandomState(3)
+    blobs = cv2.GaussianBlur(rs.randn(h, w).astype(np.float32), (0, 0), max(2.0, 0.08 * w))
+    synth = synth * (1.0 + 0.5 * blobs / max(float(blobs.std()), 1e-4) * 0.10)[..., None]
+    # --- real background where visible, hole-filled by normalised convolution, then synthetic
+    res = sm * valid[..., None]
+    remain = 1.0 - valid
+    for sg in (0.06, 0.2, 0.6):
+        sig = max(1.5, sg * w)
+        den = cv2.GaussianBlur(valid, (0, 0), sig)
+        num = cv2.GaussianBlur(sm * valid[..., None], (0, 0), sig)
+        est = num / np.maximum(den, 1e-4)[..., None]
+        c = np.clip(den * 4.0 - 0.3, 0, 1)
+        res = res + (remain * c)[..., None] * est
+        remain = remain * (1 - c)
+    res = res + remain[..., None] * synth
+    # soft structure only: the strip is a blurry reflection source, never a crisp copy
+    res = cv2.GaussianBlur(res, (0, 0), max(1.0, 0.012 * w))
+    cyf = (paste_y * f + 2.1 * gh * f) / float(h)
+    # horizon / strongest tonal step: place it mid-lens (light above / dark below)
+    rws = cv2.GaussianBlur(res.mean(2).mean(1).astype(np.float32).reshape(-1, 1), (1, 0), max(1.5, 0.03 * h)).ravel()
+    if len(rws) > 12:
+        d = rws[6:] - rws[:-6]
+        lo = int(0.2 * len(d))
         j = lo + int(np.argmax(np.abs(d[lo:])))
         if abs(d[j]) > 18:
-            cy = (j + 3) / float(len(rows)) - 0.04
-    return E[:, ::-1].copy(), float(np.clip(cy, 0.1, 0.9))
+            cyf = (j + 3) / float(len(rws)) - 0.04
+    return res[:, ::-1].copy().astype(np.float32), float(np.clip(cyf, 0.1, 0.9)), f
 
 
-def _lens_env(E, cy_frac, cx_frac, lw, lh):
+def _lens_env(E, cy_frac, cx_frac, lw, lh, f=1.0):
     # perspective-ish window of the environment mapped on a convex (spherical) lens
     Eh, Ew = E.shape[:2]
-    win_w = min(float(Ew), 3.3 * lw)
+    win_w = min(float(Ew), 3.3 * lw * f)
     win_h = win_w * lh / lw * 1.05
     if win_h > Eh:
         win_h = float(Eh)
@@ -1141,8 +1503,10 @@ def _lens_env(E, cy_frac, cx_frac, lw, lh):
     bulge = 1.0 + 0.55 * r2
     # slight vertical tilt (keystone) so the horizon curves like in a curved mirror
     mx = (cx + nx * bulge * win_w / 2).astype(np.float32)
+    
     my = (cy + ny * bulge * win_h / 2 + 0.06 * win_h * nx * nx).astype(np.float32)
     out = cv2.remap(E, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    out = cv2.resize(out, (lw, lh), interpolation=cv2.INTER_LINEAR)
     return cv2.GaussianBlur(out, (0, 0), 1.0 + lw / 70.0)
 
 
@@ -1163,8 +1527,10 @@ def render_worn_glasses(portrait_rgb, glasses_rgba, paste_x, paste_y, strength=1
     x1, y1 = min(W, paste_x + gw + pad_x), min(H, paste_y + gh + pad_y)
     if x1 - x0 < 4 or y1 - y0 < 4:
         x0, y0, x1, y1 = 0, 0, W, H
-    local = scene[y0:y1, x0:x1].reshape(-1, 3)
-    light = 0.6 * local.mean(0) + 0.4 * scene.reshape(-1, 3).mean(0)
+    sc4 = np.ascontiguousarray(scene[::4, ::4])          # cheap statistics only
+    lx0, ly0, lx1, ly1 = x0 // 4, y0 // 4, max(x0 // 4 + 2, x1 // 4), max(y0 // 4 + 2, y1 // 4)
+    local = sc4[ly0:ly1, lx0:lx1].reshape(-1, 3)
+    light = 0.6 * local.mean(0) + 0.4 * sc4.reshape(-1, 3).mean(0)
     tint = 1.0 + 0.45 * (np.clip(light / max(1e-3, light.mean()), 0.78, 1.25) - 1.0)
     prod_l = float(rgb[solid].mean()) if solid.any() else 128.0
     expo = float(np.clip((float(local.mean()) / max(prod_l, 1.0)) ** 0.30, 0.74, 1.04))
@@ -1182,14 +1548,14 @@ def render_worn_glasses(portrait_rgb, glasses_rgba, paste_x, paste_y, strength=1
 
     out = base.copy()
     lensf = lm[..., None]
-    light_dir = _estimate_light(scene, x0, y0, x1, y1)
+    light_dir = _estimate_light(sc4, lx0, ly0, lx1, ly1)
 
     # ---- 2) lens environment reflection
     n, lbl, stats, cents = cv2.connectedComponentsWithStats((lm > 0.35).astype(np.uint8), connectivity=8)
     comps = sorted(range(1, n), key=lambda i: -stats[i, cv2.CC_STAT_AREA])[:2]
     comps = [i for i in comps if stats[i, cv2.CC_STAT_AREA] > 0.02 * gw * gh]
     comps.sort(key=lambda i: cents[i][0])
-    E, cy_frac = _env_strip(scene, paste_x, paste_y, gw, gh)
+    E, cy_frac, f_env = _env_strip(scene, paste_x, paste_y, gw, gh)
     env_full = np.zeros_like(base)
     spec = np.zeros((gh, gw), np.float32)
     shade = np.ones((gh, gw), np.float32)
@@ -1198,7 +1564,7 @@ def render_worn_glasses(portrait_rgb, glasses_rgba, paste_x, paste_y, strength=1
     for k, i in enumerate(comps):
         bx, by, bw, bh = stats[i, 0], stats[i, 1], stats[i, 2], stats[i, 3]
         cxf = 0.30 if len(comps) == 2 and k == 0 else (0.70 if len(comps) == 2 else 0.5)
-        env = _lens_env(E, cy_frac, cxf, bw, bh)
+        env = _lens_env(E, cy_frac, cxf, bw, bh, f_env)
         mean_l = float(env.mean())
         gain = float(np.clip(105.0 / max(mean_l, 1.0), 1.0, 1.9)) if m > 0.4 else 1.0
         # crisp-ify + contrast around the mean (mirrors are punchy)
@@ -1250,7 +1616,7 @@ def render_worn_glasses(portrait_rgb, glasses_rgba, paste_x, paste_y, strength=1
     out = out + (255.0 - out) * np.clip(hl, 0, 0.9)
 
     # ---- 5) grain matched to portrait, softer alpha edge
-    gray = cv2.cvtColor(scene.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    gray = cv2.cvtColor(scene[y0:y1, x0:x1].astype(np.uint8), cv2.COLOR_RGB2GRAY)
     sigma = float(np.clip(cv2.Laplacian(gray, cv2.CV_32F).std() / 18.0, 0.8, 3.5))
     out = out + np.random.RandomState(7).normal(0, sigma, out.shape).astype(np.float32)
     a2 = cv2.GaussianBlur(a.astype(np.float32), (3, 3), 0.7)
@@ -1445,13 +1811,27 @@ def composite_eyewear_on_model(portrait_pil, prod_rgba, is_closeup=False, shot_k
         face_cx = w // 2
         eye_y = int(h * (0.42 if is_closeup else 0.36))
         target_w = int(min(w, h) * (0.56 if is_closeup else 0.42))
-    target_h = max(1, int(prod_rgba.height * (target_w / prod_rgba.width)))
-    glasses_resized = prod_rgba.resize((target_w, target_h), Image.Resampling.LANCZOS)
-    if abs(angle_deg) > 0.5:
-        glasses_resized = glasses_resized.rotate(-angle_deg, resample=Image.Resampling.BICUBIC, expand=True)
+    placed = None
+    try:
+        # 精準放置：YuNet 臉部特徵點 (雙眼/鼻) → 眼鏡寬 = k x 瞳距、鏡片中心對齊眼線、依眼線傾斜
+        import espner_face as FACE
+        placed = FACE.place_on_portrait(portrait_pil.convert("RGB"), prod_rgba, product="oversized" if is_snow else "aviator")
+    except Exception as _e:
+        print(f"  ℹ️ 特徵點放置略過 ({_e})，改用臉框估計")
+    if placed is not None:
+        paste_x, paste_y, glasses_resized, _info = placed
+        paste_x, paste_y = int(paste_x), int(paste_y)
+        bx = _info.get("face_box") if isinstance(_info, dict) else None
+        if bx:
+            FACE_BOXES[shot_key] = [int(bx[0]) / w, int(bx[1]) / h, int(bx[2]) / w, int(bx[3]) / h]
+    else:
+        target_h = max(1, int(prod_rgba.height * (target_w / prod_rgba.width)))
+        glasses_resized = prod_rgba.resize((target_w, target_h), Image.Resampling.LANCZOS)
+        if abs(angle_deg) > 0.5:
+            glasses_resized = glasses_resized.rotate(-angle_deg, resample=Image.Resampling.BICUBIC, expand=True)
+        paste_x = face_cx - glasses_resized.size[0] // 2
+        paste_y = eye_y - int(glasses_resized.size[1] * 0.48)
     gw, gh = glasses_resized.size
-    paste_x = face_cx - gw // 2
-    paste_y = eye_y - int(gh * 0.48)
     try:
         # 真實鏡片質感：鏡面反射場景 (天空/海)、上深下淺漸層、高光、金屬框受光；外型 100% 不變
         import espner_lens as LENS
@@ -1862,7 +2242,8 @@ def apply_real_glasses(sid, out_p):
     if not frames:
         return None
     out, st = TRK.recomposite_glasses(frames, g, int(round(meta["x"] * sx)), int(round(meta["y"] * sy)),
-                                      face_box=load_face_box(sid, OUT_W, OUT_H), cleanup=True)
+                                      face_box=load_face_box(sid, OUT_W, OUT_H),
+                                      glasses_free_source=os.path.exists(f"/content/temp/base_shot{sid}.png"), match_frame=True)
     cv2.setNumThreads(0)
     tmp = out_p.replace(".mp4", "_glasses.mp4")
     vw = cv2.VideoWriter(tmp, cv2.VideoWriter_fourcc(*"mp4v"), 24.0, (OUT_W, OUT_H))
@@ -4961,7 +5342,7 @@ cells = [
             "# ==============================================================================\n",
             "# 子程序腳本 3A：純 OpenCV 零記憶體去背 + 中英導演提示詞自動翻譯 + RealVisXL 真人模特兒生成 + 100% 原始眼鏡配戴合成\n",
             "# ==============================================================================\n",
-        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("track_code", TRACK_CODE) + embed_stage("salvage_code", SALVAGE_CODE) + embed_stage("lens_code", LENS_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
+        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("track_code", TRACK_CODE) + embed_stage("salvage_code", SALVAGE_CODE) + embed_stage("lens_code", LENS_CODE) + embed_stage("face_code", FACE_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
             "\n",
             "# ==============================================================================\n",
             "# 子程序腳本 3B：獨立文字編碼器 (T4 原生 FP16 加速，算完即釋放 9.5GB T5 記憶體！)\n",
@@ -4977,6 +5358,7 @@ cells = [
             "Path(\"/content/temp/espner_track.py\").write_text(track_code, encoding=\"utf-8\")\n",
             "Path(\"/content/temp/espner_salvage.py\").write_text(salvage_code, encoding=\"utf-8\")\n",
             "Path(\"/content/temp/espner_lens.py\").write_text(lens_code, encoding=\"utf-8\")\n",
+            "Path(\"/content/temp/espner_face.py\").write_text(face_code, encoding=\"utf-8\")\n",
             "import glob as _glob\n",
             "for _old in _glob.glob(\"/content/temp/keyframe_shot*.png\") + _glob.glob(\"/content/temp/glasses_shot*.png\") + _glob.glob(\"/content/temp/base_shot*.png\") + _glob.glob(\"/content/temp/raw_shot*.mp4\") + [\"/content/temp/glasses_meta.json\"] + [\"/content/temp/stage3c_status.json\", \"/content/temp/prompt_embeds.pt\"]:\n",
             "    if os.path.exists(_old):\n",
