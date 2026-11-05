@@ -107,6 +107,27 @@ NEG_PORTRAIT = "sunglasses, glasses, eyewear, goggles, deformed face, asymmetric
 # ---- 參考片標準 30 秒分鏡 (4 鏡 + 片尾) ----
 # wear=True 的鏡頭：肖像需正面面向鏡頭，才能精準合成真實眼鏡；動作在影片階段才發生
 STYLE_PLANS = {
+    # ★ 品牌核准格式 (依雲端「廣告」資料夾內已審核 MADRID / CELEBRITY v4 逐格量測)：
+    #   故事 14.5s (大特寫→拉遠→中景→3/4→微風→推近) + 米色金框卡 2.46s + 近白片尾 4.04s = 21.0s
+    "H_HOUSE_21S": {
+        "subject": "{talent}",
+        "look": "natural bright daylight, shallow depth of field, soft natural film look, sharp focus, luxury eyewear campaign, photorealistic",
+        "endcard": "house", "endcard_dur": 6.5, "brand_mark": None, "mood": "warm", "grade": "A_warm_film", "grade_strength": 0.25,
+        "shots": [
+            {"framing": "Extreme close-up portrait, the face filling the frame", "scene": "{location}", "wear": True, "closeup": True, "dur": 2.5, "copy": None,
+             "motion": "Extreme close-up: the model looks calmly into the camera, the mirrored lenses reflect the surroundings, the camera slowly pulls back, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Close-up portrait", "scene": "{location}", "wear": True, "closeup": True, "dur": 2.0, "copy": None,
+             "motion": "Close-up: the model faces the camera with a calm confident expression, a light breeze moves the hair, the camera keeps pulling back slowly, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Medium shot from the waist up, facing the camera", "scene": "{location}", "wear": True, "closeup": False, "dur": 2.5, "copy": None,
+             "motion": "The model stands relaxed facing the camera, clothes move gently in the breeze, the camera slowly pulls back, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Medium shot, three-quarter view toward the camera", "scene": "{location}", "wear": True, "closeup": False, "dur": 2.5, "copy": None,
+             "motion": "The model stands in a relaxed three-quarter pose and slowly turns the face toward the camera, the camera tracks sideways smoothly, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Medium shot, facing the camera", "scene": "{location}", "wear": True, "closeup": False, "dur": 2.5, "copy": None,
+             "motion": "The model stands facing the camera, the breeze moves the hair and clothes, sunlight glints on the lenses, the camera slowly orbits a little, subtle natural motion, stable framing, cinematic."},
+            {"framing": "Medium close-up portrait, facing the camera", "scene": "{location}", "wear": True, "closeup": True, "dur": 2.5, "copy": None,
+             "motion": "Hero shot: the model looks into the camera with a confident subtle smile, the lenses reflect the bright surroundings, the camera pushes in slowly, subtle natural motion, stable framing, cinematic."},
+        ],
+    },
     "A_STORY_30S": {
         "subject": "a young East Asian woman with a sleek black bob haircut with bangs, natural makeup, wearing a white linen shirt",
         "look": "warm golden hour light, soft film look, natural skin texture, sharp focus, 35mm photo, photorealistic",
@@ -209,6 +230,12 @@ MOTION_PROMPTS = {
 }
 
 
+TALENTS = {
+    "auto": "a stylish model in their thirties with natural styling, wearing a light linen shirt",
+    "female": "an elegant young woman with natural makeup and softly styled hair, wearing a light linen shirt",
+    "male": "a handsome man in his thirties with short dark hair and light stubble, wearing a light linen shirt",
+}
+
 def is_reference_style(style_key):
     return style_key in STYLE_PLANS
 
@@ -222,9 +249,15 @@ def resolve_shots(cfg, custom_en=""):
     custom_en = (custom_en or "").strip()
     shots = []
     if style_key in STYLE_PLANS:
-        plan = STYLE_PLANS[style_key]
+        plan = dict(STYLE_PLANS[style_key])
+        snow = "SNOW" in cfg.get("product_category", "")
+        talent = TALENTS.get(cfg.get("talent", "auto"), TALENTS["auto"])
+        if snow:
+            talent = talent.replace("a light linen shirt", "a sleek technical ski jacket")
+        location = "at a sunny snowy mountain ski resort, crisp alpine peaks behind" if snow else "on a sunlit Mediterranean coastal promenade, sparkling sea behind"
+        plan["subject"] = plan["subject"].format(talent=talent)
         for i, sh in enumerate(plan["shots"], 1):
-            scene = _clean_scene(custom_en) if custom_en else sh["scene"]
+            scene = _clean_scene(custom_en) if custom_en else sh["scene"].format(location=location)
             face = "facing the camera directly, head level, clear unobstructed face and eyes" if sh["wear"] else "natural candid pose"
             portrait = f"{sh['framing']} of {plan['subject']}, {scene}, {face}, {plan['look']}"
             motion = sh["motion"] if not custom_en else f"{sh['motion']} Setting: {custom_en}."
@@ -3561,8 +3594,13 @@ from IPython.display import display, Image as IPImage
 MODEL_NAME = "AVIATOR" #@param {type:"string"}
 PRODUCT_CATEGORY = "SUNGLASSES (精品太陽眼鏡)" #@param ["SUNGLASSES (精品太陽眼鏡)", "SNOW_GOGGLES (極限滑雪護目鏡)"]
 
-#@markdown ### 🎨 選擇廣告視覺風格 (★ = 依參考廣告片標準的 30 秒版本；其餘為舊版 21 秒風格)
-COMMERCIAL_STYLE = "A_STORY_30S (★參考片A標準：生活敘事 4 鏡 24s + 文案字幕 + 白底分割片尾 6s = 30s)" #@param ["A_STORY_30S (★參考片A標準：生活敘事 4 鏡 24s + 文案字幕 + 白底分割片尾 6s = 30s)", "B_COASTAL_30S (★參考片B標準：特寫→中景→漫步→英雄推近 4 鏡 20s + 灰階展台片尾 10s = 30s)", "0_CLASSIC_MADRID (經典精品：15s雙鏡故事 + 2s金框石牆過場 + 4.5s白底原圖片尾 = 21.5s)", "1_CYBERPUNK_NEON (賽博龐克：霓虹調色 + 光學HUD + 故障轉場 + 5s白底原圖片尾 = 21.0s)", "2_VINTAGE_1985 (復古1985：柯達暖金膠片 + 6s散景金框章節卡 + 5s白底原圖片尾 = 21.0s)", "3_HAUTE_COUTURE_NOIR (高訂黑白：巴黎米蘭黑白時尚邊框 + 5s白底原圖片尾 = 21.0s)", "4_ALPINE_EXTREME (極限冰川：冰藍橘紅HUD + 上下分割雙視角 + 5s白底原圖片尾 = 21.0s)", "5_RIVIERA_SUNSET (里維耶拉夕陽：地中海金色波光 + 5s白底原圖片尾 = 21.0s)"]
+#@markdown ### 🎨 選擇廣告視覺風格 (★★ = 你審核通過的品牌格式，建議；★ = 外部參考片 30 秒版本；其餘為舊版風格)
+COMMERCIAL_STYLE = "H_HOUSE_21S (★★品牌核准格式：依已審核 MADRID/CELEBRITY 成片｜6 鏡 14.5s + 米色金框卡 + 近白片尾 = 21s)" #@param ["H_HOUSE_21S (★★品牌核准格式：依已審核 MADRID/CELEBRITY 成片｜6 鏡 14.5s + 米色金框卡 + 近白片尾 = 21s)", "A_STORY_30S (★參考片A標準：生活敘事 4 鏡 24s + 文案字幕 + 白底分割片尾 6s = 30s)", "B_COASTAL_30S (★參考片B標準：特寫→中景→漫步→英雄推近 4 鏡 20s + 灰階展台片尾 10s = 30s)", "0_CLASSIC_MADRID (經典精品：15s雙鏡故事 + 2s金框石牆過場 + 4.5s白底原圖片尾 = 21.5s)", "1_CYBERPUNK_NEON (賽博龐克：霓虹調色 + 光學HUD + 故障轉場 + 5s白底原圖片尾 = 21.0s)", "2_VINTAGE_1985 (復古1985：柯達暖金膠片 + 6s散景金框章節卡 + 5s白底原圖片尾 = 21.0s)", "3_HAUTE_COUTURE_NOIR (高訂黑白：巴黎米蘭黑白時尚邊框 + 5s白底原圖片尾 = 21.0s)", "4_ALPINE_EXTREME (極限冰川：冰藍橘紅HUD + 上下分割雙視角 + 5s白底原圖片尾 = 21.0s)", "5_RIVIERA_SUNSET (里維耶拉夕陽：地中海金色波光 + 5s白底原圖片尾 = 21.0s)"]
+
+#@markdown ### 🧑 模特兒 / 片尾標語 (標語留空 = 依型號自動帶入已審核標語，例如 MADRID、CELEBRITY、PILOT、AVIATOR)
+TALENT = "自動" #@param ["自動", "女性", "男性"]
+TAGLINE_ZH = "" #@param {type:"string"}
+TAGLINE_EN = "" #@param {type:"string"}
 
 #@markdown ### 📐 輸出比例
 ASPECT_RATIO = "9:16 直式 (IG Reels / 抖音 720x1280)" #@param ["9:16 直式 (IG Reels / 抖音 720x1280)", "16:9 橫式 (YouTube / 官網 1920x1080)"]
@@ -3640,7 +3678,10 @@ cfg = {
     "aspect": "16:9" if ASPECT_RATIO.startswith("16:9") else "9:16",
     "copy": [x.strip() for x in (COPY_LINE_1, COPY_LINE_2, COPY_LINE_3)],
     "music": "none" if MUSIC_SOURCE.startswith("3_") else ("file" if MUSIC_PATH else "auto"),
-    "music_path": MUSIC_PATH
+    "music_path": MUSIC_PATH,
+    "talent": {"女性": "female", "男性": "male"}.get(TALENT, "auto"),
+    "tagline_zh": TAGLINE_ZH.strip(),
+    "tagline_en": TAGLINE_EN.strip()
 }
 with open("/content/temp/job_config.json", "w", encoding="utf-8") as f:
     json.dump(cfg, f, ensure_ascii=False, indent=2)
@@ -3872,7 +3913,8 @@ def iter_reference_timeline():
         if copies:
             print("ℹ️ 步驟 2 的文案是空的，改用預設文案")
     lut = G.build_lut(plan["grade"])
-    mark = T.render_brand_mark_layer(W, H, position=plan["brand_mark"])
+    mark = T.render_brand_mark_layer(W, H, position=plan["brand_mark"]) if plan.get("brand_mark") else None
+    gstr = float(plan.get("grade_strength", 0.3))
     prev_last = None
     for sh in shots:
         n = int(round(sh["dur"] * 24))
@@ -3885,16 +3927,16 @@ def iter_reference_timeline():
             lines = [x for x in copies[ci].split("/") if x.strip()]
             print(f"  ✍️ 第 {sh['id']} 鏡文案：{' '.join(lines)}")
             layer = T.render_copy_layer(W, H, lines, brand_mark=False, align="left")
-            if T.text_color_for(G.grade_frame(frames[len(frames) // 2], plan["grade"], lut=lut, strength=0.3), layer) == "light":
+            if T.text_color_for(G.grade_frame(frames[len(frames) // 2], plan["grade"], lut=lut, strength=gstr), layer) == "light":
                 layer = T.render_copy_layer(W, H, lines, brand_mark=False, align="left", color="light")
         for i, fr in enumerate(frames):
             t = i / 24.0
-            out = G.grade_frame(fr, plan["grade"], lut=lut, strength=0.3)
+            out = G.grade_frame(fr, plan["grade"], lut=lut, strength=gstr)
             out = G.add_grain(out, amount=1.5, seed=i)
             if prev_last is not None and i < 4:
                 # 4 格柔和溶接，避免硬切的跳動感
                 out = cv2.addWeighted(prev_last, 1.0 - (i + 1) / 5.0, out, (i + 1) / 5.0, 0)
-            if plan["brand_mark"] == "top-left" or sh["id"] == 1:
+            if mark is not None and (plan["brand_mark"] == "top-left" or sh["id"] == 1):
                 mark_op = 1.0 if plan["brand_mark"] == "top-left" else T.fade_opacity(t, 0.6, 4.0, fade=0.5)
                 if mark_op > 0:
                     out = T.overlay_layer(out, mark, 0.85 * mark_op)
@@ -3904,6 +3946,19 @@ def iter_reference_timeline():
                     out = T.overlay_layer(out, layer, op)
             yield out
         prev_last = out
+    if plan["endcard"] == "house":
+        # ★★ 品牌核准格式：故事硬切 → 米色金框卡 (E S P N E R → 型號) → 溶接 → 近白片尾 (型號專屬標語)
+        import espner_house as HS
+        zh, en = HS.tagline_for(display_name)
+        zh = cfg.get("tagline_zh") or zh
+        en = cfg.get("tagline_en") or en
+        print(f"  🏷️ 片尾標語：{zh}｜{en}")
+        end = HS.build_house_endcard("/content/temp/product_clean_rgba.png", display_name, zh, en, W=W, H=H, duration=4.04, fps=24, snow=is_snow)
+        for fr in HS.build_house_transition(display_name, W=W, H=H, fps=24, endcard_first_frame=end[0]):
+            yield fr
+        for fr in end:
+            yield fr
+        return
     slogan = [x for x in (copies[2] if len(copies) > 2 and copies[2] else "把目光，/還給世界。").split("/") if x.strip()]
     if plan["endcard"] == "split":
         end = T.build_endcard_split("/content/temp/product_clean_rgba.png", W, H, display_name, slogan_lines=tuple(slogan), category="SNOW GOGGLES" if is_snow else "SUNGLASSES", duration=plan["endcard_dur"], fps=24)
@@ -4054,6 +4109,9 @@ sheet_jpg = f"/content/output/ESPNER_{safe_name}_QA_sheet.jpg"
 tw, th = (426, 240) if w > h else (240, 426)
 tiles = []
 for idx in indices:
+    if idx not in qa:
+        tiles.append(np.zeros((th, tw, 3), np.uint8))
+        continue
     t_img = cv2.resize(qa[idx], (tw, th))
     cv2.putText(t_img, f"f:{idx} ({idx/24.0:.1f}s)", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0,0,0), 3)
     cv2.putText(t_img, f"f:{idx} ({idx/24.0:.1f}s)", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255,255,255), 1)
