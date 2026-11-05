@@ -3105,6 +3105,360 @@ def mux_audio(video_in, audio_in, video_out, target_lufs=-16.0, fade_in=0.5, fad
     return video_out
 """
 
+HOUSE_CODE = r"""
+# espner_house.py
+# ESPNER house style: approved beige transition card (E S P N E R -> MODEL) and white studio endcard.
+# numpy + opencv-python-headless + Pillow only. Frames are uint8 BGR lists.
+# Layout is specified for a 720x1280 portrait canvas. Other sizes use a centred "column" of
+# 720*s x 1280*s with s = min(W/720, H/1280); y positions are fractions of H, x are column-relative,
+# so 1920x1080 gives a centred 607x1080 column on the same background (the parchment fills all of W).
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+
+TAGLINES = {
+    "MADRID": ("光影流轉，定格永恆姿態。", "TIMELESS ARCHITECTURAL DESIGN"),
+    "CELEBRITY": ("無懼聚焦，從容定義萬眾目光。", "AVANT-GARDE STATEMENT SERIES"),
+    "PILOT": ("破空逐光，從容浩瀚蒼穹。", "ICONIC AVIATOR POLARIZED"),
+    "AVIATOR": ("馳騁天地，尊享自由航程。", "SIGNATURE GOLD AVIATOR"),
+    "ENGELBERG TITLIS": ("風雪漫天，唯有焦點不移。", "TITLIS STORM ALL-WEATHER OPTICS"),
+}
+DEFAULT_TAGLINE = ("把目光，還給世界。", "POLARIZED LUXURY EYEWEAR")
+
+# colours (RGB)
+INK = (13, 16, 30)          # #0D101E
+SLATE = (71, 78, 90)        # #474E5A
+ZH_INK = (13, 17, 26)       # #0D111A
+EN_GREY = (105, 108, 117)   # #696C75
+GOLD = (104, 82, 40)        # card2 line 2
+CARD_GREY = (92, 88, 82)    # card2 line 3
+BOX_OUT = (157, 134, 92)    # #9D865C
+BOX_IN = (191, 183, 170)    # #BFB7AA
+PARCH = (227, 220, 197)     # #E3DCC5
+BG_END = (251, 253, 250)    # #FBFDFA
+PEAK = (250, 250, 246)      # card dissolve peak lightness
+
+# Times-like bold: Liberation Serif Bold is metric-compatible with Times New Roman Bold (the approved look).
+# Fallbacks: FreeSerif Bold, DejaVu Serif Bold, Noto Serif CJK Bold.
+_SERIF_B = ["/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSerif-Bold.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSerifBold.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc"]
+_SERIF_R = ["/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSerif-Regular.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSerif.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+            "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc"]
+_SANS_B = ["/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+           "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]
+_CJK = [("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 3),
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
+        ("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", 3),
+        ("/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc", 3),
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 0)]
+
+_SS = 4  # text supersampling factor
+
+
+def _load(paths, size):
+    for p in paths:
+        path, idx = (p if isinstance(p, tuple) else (p, 0))
+        try:
+            return ImageFont.truetype(path, int(round(size)), index=idx)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
+def tagline_for(model_name):
+    k = str(model_name or "").strip().upper()
+    return TAGLINES.get(k, DEFAULT_TAGLINE)
+
+
+def _scale(W, H):
+    return min(W / 720.0, H / 1280.0)
+
+
+def _render_line(text, paths, size_px, tracking_em, thin=0):
+    # Render one tracked line; returns (alpha float32 HxW tight to ink, ink width, ink height).
+    # size_px is the target font size at 1x; drawing happens at _SS x and is area-downsampled.
+    f = _load(paths, size_px * _SS)
+    trk = tracking_em * size_px * _SS
+    x = 0.0
+    pos = []
+    for ch in text:
+        pos.append(x)
+        x += f.getlength(ch) + trk
+    wtot = int(x + size_px * _SS * 2)
+    htot = int(size_px * _SS * 2)
+    im = Image.new("L", (wtot, htot), 0)
+    d = ImageDraw.Draw(im)
+    for ch, px in zip(text, pos):
+        d.text((px + size_px * _SS * 0.5, size_px * _SS * 0.3), ch, font=f, fill=255)
+    a = np.asarray(im)
+    if thin > 0:
+        a = cv2.erode(a, np.ones((thin, thin), np.uint8))
+    ys, xs = np.where(a > 8)
+    if len(xs) == 0:
+        return np.zeros((1, 1), np.float32), 1, 1
+    a = a[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    h, w = a.shape
+    # pad to a multiple of _SS so area-downsample is exact
+    ph, pw = (-h) % _SS, (-w) % _SS
+    a = np.pad(a, ((0, ph), (0, pw)))
+    small = cv2.resize(a, (a.shape[1] // _SS, a.shape[0] // _SS), interpolation=cv2.INTER_AREA)
+    return small.astype(np.float32) / 255.0, w / _SS, h / _SS
+
+
+def _paste(canvas_a, canvas_c, line, color, cx, y_top):
+    # Accumulate a rendered line into a float alpha canvas + colour canvas (RGB float). Ink-bbox placement.
+    a = line[0]
+    h, w = a.shape
+    x0 = int(round(cx - w / 2.0))
+    y0 = int(round(y_top))
+    H, W = canvas_a.shape
+    xa, ya = max(0, x0), max(0, y0)
+    xb, yb = min(W, x0 + w), min(H, y0 + h)
+    if xb <= xa or yb <= ya:
+        return (x0, y0, w, h)
+    sub = a[ya - y0:yb - y0, xa - x0:xb - x0]
+    cur = canvas_a[ya:yb, xa:xb]
+    newa = sub + cur * (1 - sub)
+    for c in range(3):
+        canvas_c[ya:yb, xa:xb, c] = np.where(newa > 1e-6, (color[c] * sub + canvas_c[ya:yb, xa:xb, c] * cur * (1 - sub)) / np.maximum(newa, 1e-6), 0)
+    canvas_a[ya:yb, xa:xb] = newa
+    return (x0, y0, w, h)
+
+
+def _parchment(W, H):
+    # Deterministic mottled parchment with slight top->bottom gradient (BGR float32 HxWx3).
+    rng = np.random.RandomState(1234)
+    base = np.zeros((H, W), np.float32)
+    for sc, amp in ((96, 1.1), (40, 0.75), (14, 0.35)):
+        n = rng.randn(max(2, H // sc + 2), max(2, W // sc + 2)).astype(np.float32)
+        n = cv2.resize(n, (W, H), interpolation=cv2.INTER_CUBIC)
+        base += n * amp
+    # a few elongated cloudy blotches
+    for _ in range(14):
+        cx, cy = rng.randint(0, W), rng.randint(0, H)
+        ax, ay = rng.randint(W // 12, W // 4), rng.randint(H // 80, H // 30)
+        blot = np.zeros((H, W), np.float32)
+        cv2.ellipse(blot, (cx, cy), (ax, ay), rng.randint(-20, 20), 0, 360, float(rng.choice([-1, 1]) * rng.uniform(1.0, 2.2)), -1)
+        base += cv2.GaussianBlur(blot, (0, 0), 14)
+    base = cv2.GaussianBlur(base, (0, 0), 1.2)
+    top = np.array([229, 220, 203], np.float32)
+    bot = np.array([224, 218, 195], np.float32)
+    t = np.linspace(0, 1, H, dtype=np.float32)[:, None, None]
+    rgb = top * (1 - t) + bot * t
+    rgb = rgb + base[:, :, None] * np.array([1.0, 1.0, 1.15], np.float32)
+    return rgb[:, :, ::-1].copy()
+
+
+def _fit_zh_size(text, target_h):
+    # choose CJK font size so the ink height of the line equals target_h px (1x)
+    return target_h / 0.90
+
+
+def _blend_over(bg, a, color_rgb_canvas):
+    # bg BGR float32; a HxW alpha; colour canvas RGB float
+    col = color_rgb_canvas[:, :, ::-1]
+    return bg * (1 - a[:, :, None]) + col * a[:, :, None]
+
+
+def _box_layer(W, H, s):
+    # box mask drawn once: returns (outer mask, inner mask) uint8 at frame size
+    cx = W / 2.0
+    x0, x1 = cx - 290 * s, cx + 290 * s
+    y0, y1 = 480 * H / 1280.0, 790 * H / 1280.0
+    if H != 1280:
+        # keep vertical box proportions of H for the 9:16 case; for other aspect ratios use scale s about centre
+        if abs(W / H - 720 / 1280.0) > 0.01:
+            cy = 0.496 * H
+            y0, y1 = cy - 155 * s, cy + 155 * s
+    outer = np.zeros((H, W), np.uint8)
+    inner = np.zeros((H, W), np.uint8)
+    lw = max(1, int(round(2 * s)))
+    cv2.rectangle(outer, (int(round(x0)), int(round(y0))), (int(round(x1)) - 1, int(round(y1)) - 1), 255, lw)
+    ins = max(2, int(round(6 * s)))
+    cv2.rectangle(inner, (int(round(x0)) + ins, int(round(y0)) + ins), (int(round(x1)) - 1 - ins, int(round(y1)) - 1 - ins), 255, 1)
+    return outer, inner, (x0, y0, x1, y1)
+
+
+def _text_layers_cards(model_name, W, H, s):
+    # returns dict of (alpha HxW float32, colour canvas RGB float32) for card1 and card2 text
+    cx = W / 2.0
+    box_cy = 0.496 * H
+    # card 1: brand, cap h 35 px at 1x, cap-top y 617
+    l1 = _render_line("ESPNER", _SERIF_B, 35 * s / 0.662, 0.47)
+    a1 = np.zeros((H, W), np.float32); c1 = np.zeros((H, W, 3), np.float32)
+    _paste(a1, c1, l1, INK, cx, box_cy - 18 * s)
+    # card 2
+    name = str(model_name).upper()
+    l2 = _render_line(name, _SERIF_B, 48 * s / 0.662, 0.0)
+    l3 = _render_line("ESPNER EYEWEAR ARCHIVE", _SERIF_R, 15 * s / 0.662, 0.15)
+    l4 = _render_line("POLARIZED LUXURY COLLECTION", _SERIF_R, 15 * s / 0.662, 0.06)
+    a2 = np.zeros((H, W), np.float32); c2 = np.zeros((H, W, 3), np.float32)
+    # shrink long names so they stay inside the box
+    maxw = 520 * s
+    if l2[0].shape[1] > maxw:
+        k = maxw / l2[0].shape[1]
+        l2 = (cv2.resize(l2[0], (int(l2[0].shape[1] * k), max(1, int(l2[0].shape[0] * k))), interpolation=cv2.INTER_AREA), 0, 0)
+    _paste(a2, c2, l2, INK, cx, box_cy - 47 * s)
+    y3 = box_cy + 28 * s
+    y4 = box_cy + 62 * s
+    _paste(a2, c2, l3, GOLD, cx, y3)
+    _paste(a2, c2, l4, CARD_GREY, cx, y4)
+    return (a1, c1), (a2, c2)
+
+
+def _ramp(i, a, b):
+    return float(np.clip((i - a) / float(max(1e-6, b - a)), 0.0, 1.0))
+
+
+def build_house_transition(model_name, W=720, H=1280, fps=24, endcard_first_frame=None):
+    s = _scale(W, H)
+    parch = _parchment(W, H)
+    outer, inner, _ = _box_layer(W, H, s)
+    om = (outer > 0).astype(np.float32)
+    im = ((inner > 0) & (outer == 0)).astype(np.float32)
+    (a1, c1), (a2, c2) = _text_layers_cards(model_name, W, H, s)
+    n1 = int(round(1.0 * fps))
+    n2 = int(round(0.67 * fps))
+    nd = int(round(0.8 * fps))
+    fin = int(round(0.33 * fps))
+    fout = int(round(0.25 * fps))
+    if endcard_first_frame is not None:
+        end = cv2.resize(endcard_first_frame, (W, H)).astype(np.float32) if endcard_first_frame.shape[:2] != (H, W) else endcard_first_frame.astype(np.float32)
+    else:
+        end = np.empty((H, W, 3), np.float32); end[:] = BG_END[::-1]
+    peak = np.empty((H, W, 3), np.float32); peak[:] = PEAK[::-1]
+    boxc_o = np.array(BOX_OUT[::-1], np.float32)
+    boxc_i = np.array(BOX_IN[::-1], np.float32)
+    frames = []
+
+    def compose(base, ta, tc, fa, boxa):
+        f = base
+        f = f * (1 - (om * boxa)[:, :, None]) + boxc_o * (om * boxa)[:, :, None]
+        f = f * (1 - (im * boxa)[:, :, None]) + boxc_i * (im * boxa)[:, :, None]
+        if ta is not None:
+            aa = ta * fa
+            f = f * (1 - aa[:, :, None]) + tc[:, :, ::-1] * aa[:, :, None]
+        return f
+
+    for i in range(n1):
+        fa = min(_ramp(i, 0, fin), 1.0 - _ramp(i, n1 - fout, n1))
+        frames.append(np.clip(compose(parch, a1, c1, fa, 1.0), 0, 255).astype(np.uint8))
+    for i in range(n2):
+        frames.append(np.clip(compose(parch, a2, c2, _ramp(i, 0, fin), 1.0), 0, 255).astype(np.uint8))
+    for i in range(nd):
+        t = (i + 1) / float(nd)
+        if t <= 0.5:
+            u = t / 0.5
+            base = parch * (1 - u) + peak * u
+            f = compose(base, a2, c2, 1.0 - u, 1.0 - u)
+        else:
+            u = (t - 0.5) / 0.5
+            f = peak * (1 - u) + end * u
+        frames.append(np.clip(f, 0, 255).astype(np.uint8))
+    return frames
+
+
+def _prep_product(product_rgba_path, W, H, s, cy_frac, width_frac=0.75):
+    im = Image.open(product_rgba_path).convert("RGBA")
+    arr = np.asarray(im)
+    ys, xs = np.where(arr[:, :, 3] > 10)
+    arr = arr[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    return arr
+
+
+def build_house_endcard(product_rgba_path, model_name, tagline_zh, tagline_en, W=720, H=1280,
+                        duration=4.04, fps=24, snow=False):
+    s = _scale(W, H)
+    cx = W / 2.0
+    name = str(model_name).upper()
+    A = np.zeros((H, W), np.float32)
+    C = np.zeros((H, W, 3), np.float32)
+    if not snow:
+        _paste(A, C, _render_line("ESPNER", _SERIF_B, 33 * s / 0.662, 0.50), INK, cx, 0.1203 * H)
+        _paste(A, C, _render_line(name, _SERIF_B, 19 * s / 0.662, 0.12), SLATE, cx, 0.1688 * H)
+        cy_frac, zh_y, en_y = 0.415, 0.663, 0.7109
+    else:
+        _paste(A, C, _render_line("ESPNER", _SERIF_B, 33 * s / 0.662, 0.50), INK, cx, 0.1273 * H)
+        big = _render_line(name, _SERIF_B, 37 * s / 0.662, 0.12)
+        maxw = 0.86 * W
+        if big[0].shape[1] > maxw:
+            k = maxw / big[0].shape[1]
+            big = (cv2.resize(big[0], (int(big[0].shape[1] * k), max(1, int(big[0].shape[0] * k))), interpolation=cv2.INTER_AREA), 0, 0)
+        _paste(A, C, big, (20, 23, 28), cx, 0.1852 * H)
+        cy_frac, zh_y, en_y = 0.377, 0.601, 0.645
+    # Chinese tagline: faux-light by eroding at supersampled scale
+    zh = _render_line(tagline_zh, _CJK, 29 * s / 0.90, 0.17, thin=3)
+    _paste(A, C, zh, ZH_INK, cx, zh_y * H)
+    if snow:
+        en = _render_line(tagline_en.upper(), _SANS_B, 13 * s / 0.716, 0.20)
+    else:
+        en = _render_line(tagline_en.upper(), _SERIF_R, 13 * s / 0.662, 0.17)
+    _paste(A, C, en, EN_GREY, cx, en_y * H)
+    bg = np.empty((H, W, 3), np.float32); bg[:] = BG_END[::-1]
+    static = np.clip(bg * (1 - A[:, :, None]) + C[:, :, ::-1] * A[:, :, None], 0, 255).astype(np.uint8)
+
+    # product layer with contact shadow baked in (premultiplied BGRA float) at 1.000 scale
+    prod = _prep_product(product_rgba_path, W, H, s, cy_frac)
+    ph0, pw0 = prod.shape[:2]
+    pw = 0.75 * 720 * s
+    ph = pw * ph0 / pw0
+    # snow goggle is taller; cap its height so the layout never collides with text
+    pad_x, pad_top, pad_bot = int(0.05 * pw) + 20, 20, int(0.12 * ph) + 40
+    LW, LH = int(round(pw)) + 2 * pad_x, int(round(ph)) + pad_top + pad_bot
+    pr = cv2.resize(prod, (int(round(pw)), int(round(ph))), interpolation=cv2.INTER_AREA)
+    pa = pr[:, :, 3].astype(np.float32) / 255.0
+    prgb = pr[:, :, :3].astype(np.float32)[:, :, ::-1]  # BGR
+    layer_a = np.zeros((LH, LW), np.float32)
+    layer_c = np.zeros((LH, LW, 3), np.float32)
+    # shadow: ellipse ~80% product width, bottom edge ~15 px below the product bottom, blur ~12 px
+    sh = np.zeros((LH, LW), np.float32)
+    ew = 0.40 * pw
+    eh = max(6.0, 12 * s) * 1.0
+    ecy = pad_top + ph + 15 * s - eh * 0.9
+    cv2.ellipse(sh, (LW // 2, int(round(ecy))), (int(ew), int(eh)), 0, 0, 360, 1.0, -1)
+    sh = cv2.GaussianBlur(sh, (0, 0), 6.0 * s) * 0.18 * 1.9
+    sh = np.clip(sh, 0, 0.3)
+    layer_a = sh.copy()
+    layer_c[:] = (40, 44, 48)  # dark neutral shadow colour (BGR)
+    y0, x0 = pad_top, pad_x
+    sa = layer_a[y0:y0 + pr.shape[0], x0:x0 + pr.shape[1]]
+    newa = pa + sa * (1 - pa)
+    sc = layer_c[y0:y0 + pr.shape[0], x0:x0 + pr.shape[1]]
+    prem = prgb * pa[:, :, None] + sc * (sa * (1 - pa))[:, :, None]
+    # store premultiplied colour for the whole layer
+    prem_full = layer_c * layer_a[:, :, None]
+    prem_full[y0:y0 + pr.shape[0], x0:x0 + pr.shape[1]] = prem
+    layer_a[y0:y0 + pr.shape[0], x0:x0 + pr.shape[1]] = newa
+    premul = np.dstack([prem_full, layer_a]).astype(np.float32)
+    # anchor: product centre (within the layer) at (cx, cy_frac*H)
+    anchor_x = LW / 2.0
+    anchor_y = pad_top + ph / 2.0
+    n = int(round(duration * fps))
+    frames = []
+    for i in range(n):
+        z = 1.0 + 0.035 * (i / float(max(1, n - 1)))
+        zw, zh_ = int(round(LW * z)), int(round(LH * z))
+        L = cv2.resize(premul, (zw, zh_), interpolation=cv2.INTER_LINEAR)
+        ox = int(round(cx - anchor_x * z))
+        oy = int(round(cy_frac * H - anchor_y * z))
+        xa, ya = max(0, ox), max(0, oy)
+        xb, yb = min(W, ox + zw), min(H, oy + zh_)
+        f = static.copy()
+        if xb > xa and yb > ya:
+            sub = L[ya - oy:yb - oy, xa - ox:xb - ox]
+            roi = f[ya:yb, xa:xb].astype(np.float32)
+            out = sub[:, :, :3] + roi * (1.0 - sub[:, :, 3:4])
+            f[ya:yb, xa:xb] = np.clip(out + 0.5, 0, 255).astype(np.uint8)
+        frames.append(f)
+    return frames
+"""
+
 QC_CODE = r"""
 # -*- coding: utf-8 -*-
 # ESPNER video quality check (espner_qc.py)
@@ -4144,11 +4498,11 @@ def step4_lines():
     out = []
     for ln in cell_lines(STEP4_CODE):
         if ln.strip() == "# __EMBED_MODULES__":
-            for var, fname, code in [("titles_code", "espner_titles.py", TITLES_CODE), ("grade_code", "espner_grade.py", GRADE_CODE), ("audio_code", "espner_audio.py", AUDIO_CODE), ("qc_code", "espner_qc.py", QC_CODE)]:
+            for var, fname, code in [("titles_code", "espner_titles.py", TITLES_CODE), ("grade_code", "espner_grade.py", GRADE_CODE), ("audio_code", "espner_audio.py", AUDIO_CODE), ("qc_code", "espner_qc.py", QC_CODE), ("house_code", "espner_house.py", HOUSE_CODE)]:
                 out += embed_stage(var, code)
                 out.append(f'open("/content/temp/{fname}", "w", encoding="utf-8").write({var})\n')
             out.append("import importlib, sys as _sys\n")
-            out.append("for _m in (\"espner_titles\", \"espner_grade\", \"espner_audio\", \"espner_qc\", \"shot_plan\"):\n")
+            out.append("for _m in (\"espner_titles\", \"espner_grade\", \"espner_audio\", \"espner_qc\", \"espner_house\", \"shot_plan\"):\n")
             out.append("    _sys.modules.pop(_m, None)\n")
         else:
             out.append(ln)
@@ -4214,7 +4568,7 @@ cells = [
             "ensure_cuda_torch(required=False)\n",
             "\n",
             "subprocess.run([\"apt-get\", \"update\", \"-qq\"], check=True)\n",
-            "subprocess.run([\"apt-get\", \"install\", \"-y\", \"-qq\", \"ffmpeg\", \"fonts-noto-cjk\", \"fonts-dejavu-core\"], check=True)\n",
+            "subprocess.run([\"apt-get\", \"install\", \"-y\", \"-qq\", \"ffmpeg\", \"fonts-noto-cjk\", \"fonts-dejavu-core\", \"fonts-liberation\"], check=True)\n",
             "\n",
             "for d in [\"/content/input\", \"/content/output\", \"/content/temp\"]:\n",
             "    os.makedirs(d, exist_ok=True)\n",
