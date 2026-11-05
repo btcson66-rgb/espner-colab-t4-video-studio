@@ -115,17 +115,17 @@ STYLE_PLANS = {
         "endcard": "house", "endcard_dur": 6.5, "brand_mark": None, "mood": "warm", "grade": "A_warm_film", "grade_strength": 0.25,
         "shots": [
             {"framing": "Extreme close-up portrait, the face filling the frame", "scene": "{location}", "wear": True, "closeup": True, "dur": 2.5, "copy": None,
-             "motion": "Extreme close-up: the model looks calmly into the camera, the mirrored lenses reflect the surroundings, the camera slowly pulls back, subtle natural motion, stable framing, cinematic."},
+             "motion": "Extreme close-up: the model looks into the camera, blinks naturally and lifts the chin slightly, a breeze moves the hair across the forehead, the camera smoothly pulls back, natural lifelike motion, cinematic."},
             {"framing": "Close-up portrait", "scene": "{location}", "wear": True, "closeup": True, "dur": 2.0, "copy": None,
-             "motion": "Close-up: the model faces the camera with a calm confident expression, a light breeze moves the hair, the camera keeps pulling back slowly, subtle natural motion, stable framing, cinematic."},
+             "motion": "Close-up: the model turns the head slightly from one side toward the camera with a confident expression, the wind blows the hair, the camera keeps pulling back smoothly, natural lifelike motion, cinematic."},
             {"framing": "Medium shot from the waist up, facing the camera", "scene": "{location}", "wear": True, "closeup": False, "dur": 2.5, "copy": None,
-             "motion": "The model stands relaxed facing the camera, clothes move gently in the breeze, the camera slowly pulls back, subtle natural motion, stable framing, cinematic."},
+             "motion": "The model takes a slow step toward the camera and adjusts the shirt collar, the shirt and hair move in the sea breeze, the camera pulls back smoothly, natural lifelike motion, cinematic."},
             {"framing": "Medium shot, three-quarter view toward the camera", "scene": "{location}", "wear": True, "closeup": False, "dur": 2.5, "copy": None,
-             "motion": "The model stands in a relaxed three-quarter pose and slowly turns the face toward the camera, the camera tracks sideways smoothly, subtle natural motion, stable framing, cinematic."},
+             "motion": "The model stands in a three-quarter pose looking out to the sea, then turns the head toward the camera and smiles, the hair moves in the wind, the camera tracks sideways smoothly, natural lifelike motion, cinematic."},
             {"framing": "Medium shot, facing the camera", "scene": "{location}", "wear": True, "closeup": False, "dur": 2.5, "copy": None,
-             "motion": "The model stands facing the camera, the breeze moves the hair and clothes, sunlight glints on the lenses, the camera slowly orbits a little, subtle natural motion, stable framing, cinematic."},
+             "motion": "The model walks slowly toward the camera along the promenade, the shirt and hair move in the breeze, bright sunlight, the camera tracks backward smoothly, natural lifelike motion, cinematic."},
             {"framing": "Medium close-up portrait, facing the camera", "scene": "{location}", "wear": True, "closeup": True, "dur": 2.5, "copy": None,
-             "motion": "Hero shot: the model looks into the camera with a confident subtle smile, the lenses reflect the bright surroundings, the camera pushes in slowly, subtle natural motion, stable framing, cinematic."},
+             "motion": "Hero shot: the model looks into the camera, breaks into a confident subtle smile and tilts the head slightly, the wind moves the hair, the camera pushes in smoothly, natural lifelike motion, cinematic."},
         ],
     },
     "A_STORY_30S": {
@@ -159,17 +159,17 @@ STYLE_PLANS = {
         "endcard": "studio", "endcard_dur": 10.0, "brand_mark": "top-center", "mood": "airy", "grade": "B_bright_natural",
         "shots": [
             {"framing": "Extreme close-up portrait", "scene": "on a sunny Mediterranean coastal cliff, deep blue sea and clear sky behind", "wear": True, "closeup": True, "dur": 3.0, "copy": None,
-             "motion": "Extreme close-up: he faces the camera with a calm confident look, the mirrored lenses reflect the sea and sky, a gentle breeze moves his hair slightly, the camera slowly pulls back, subtle natural motion, stable framing, cinematic."},
+             "motion": "Extreme close-up: he faces the camera with a calm confident look, a gentle breeze moves his hair slightly, the camera slowly pulls back, subtle natural motion, stable framing, cinematic."},
             {"framing": "Medium shot", "scene": "standing on a sunlit limestone coastal terrace, bright blue sea and horizon behind", "wear": True, "closeup": False, "dur": 4.0, "copy": None,
              "motion": "He stands relaxed facing the camera on the sunlit terrace, the linen shirt ripples gently in the wind, sparkling sea behind him, the camera slowly orbits a little to the side, subtle natural motion, stable framing, cinematic."},
             {"framing": "Medium shot from the waist up", "scene": "on a sunlit limestone coastal path, bright blue sea behind", "wear": True, "closeup": False, "dur": 3.0, "copy": None,
              "motion": "He stands on the coastal path facing the camera, the shirt moves gently in the wind, waves roll softly behind him, the camera slowly dollies in, subtle natural motion, stable framing, cinematic."},
             {"framing": "Close-up portrait", "scene": "on a sunny Mediterranean coast, bright sea behind", "wear": True, "closeup": True, "dur": 3.0, "copy": None,
-             "motion": "Close-up: he looks into the camera with a confident look, the mirrored lenses reflect the bright sea, a light breeze moves his hair, the camera pushes in slowly, subtle natural motion, stable framing, cinematic."},
+             "motion": "Close-up: he looks into the camera with a confident look, a light breeze moves his hair, the camera pushes in slowly, subtle natural motion, stable framing, cinematic."},
             {"framing": "Medium shot", "scene": "leaning on a white stone railing above the Mediterranean sea in bright sun", "wear": True, "closeup": False, "dur": 4.0, "copy": None,
              "motion": "He leans relaxed on the stone railing facing the camera, the shirt moves in the sea wind, bright sunlight glints on the sea, the camera slowly arcs around him, subtle natural motion, stable framing, cinematic."},
             {"framing": "Close-up portrait", "scene": "on a sunny coastal cliff, deep blue sea and sky behind", "wear": True, "closeup": True, "dur": 3.0, "copy": None,
-             "motion": "Hero shot: he gives a subtle confident smile into the camera, the mirrored lenses reflect the bright sea, the camera pushes in slowly, subtle natural motion, stable framing, cinematic."},
+             "motion": "Hero shot: he gives a subtle confident smile into the camera, the camera pushes in slowly, subtle natural motion, stable framing, cinematic."},
         ],
     },}
 
@@ -204,37 +204,39 @@ PORTRAIT_PROMPTS = {
 ID_LOCK = "The same sunglasses stay on the face, crisp and sharp."
 MOTION_PROMPTS = {
     "0_CLASSIC_MADRID": (
-        "The model walks forward along a sunlit Mediterranean stone colonnade, turns the head slowly toward the camera and smiles slightly, the linen shirt and hair move in the sea breeze, golden sunlight flickers through the columns and glints across the lenses, the camera tracks backward smoothly in a slow dolly, cinematic luxury eyewear commercial, natural motion.",
-        "Close-up: the model lifts the chin and turns the face from left to right toward the camera, hair blowing in the ocean wind, warm golden hour light sweeps across the face and the mirrored lenses reflect the sea, the camera pushes in slowly, shallow depth of field, cinematic luxury commercial."
+        "The model walks forward along a sunlit Mediterranean stone colonnade, turns the head slowly toward the camera and smiles slightly, the linen shirt and hair move in the sea breeze, golden sunlight flickers through the columns and glints, the camera tracks backward smoothly in a slow dolly, cinematic luxury eyewear commercial, natural motion.",
+        "Close-up: the model lifts the chin and turns the face from left to right toward the camera, hair blowing in the ocean wind, the camera pushes in slowly, shallow depth of field, cinematic luxury commercial."
     ),
     "1_CYBERPUNK_NEON": (
-        "The model walks through a rainy neon-lit Tokyo street at night, rain drops falling, neon signs flicker, cyan and magenta reflections slide across the lenses, the model turns the head toward the camera, the camera tracks sideways smoothly, cinematic.",
-        "Close-up: the model slowly turns the head and looks into the camera, neon lights pulse and reflect on the lenses, rain falls in the background bokeh, the camera pushes in slowly, cinematic."
+        "The model walks through a rainy neon-lit Tokyo street at night, rain drops falling, neon signs flicker, cyan and magenta reflections slide, the model turns the head toward the camera, the camera tracks sideways smoothly, cinematic.",
+        "Close-up: the model slowly turns the head and looks into the camera, neon lights pulse and reflect, rain falls in the background bokeh, the camera pushes in slowly, cinematic."
     ),
     "2_VINTAGE_1985": (
-        "The model leans on a vintage convertible on a coastal highway at sunset, then straightens up and turns toward the camera, hair and jacket move in the warm wind, sun flare drifts across the lenses, the camera pans slowly, 1985 Kodachrome film look.",
-        "Close-up: the model turns the head with a confident smile, hair blowing in the sunset breeze, golden light flares across the lenses, the camera pushes in slowly, 35mm film grain."
+        "The model leans on a vintage convertible on a coastal highway at sunset, then straightens up and turns toward the camera, hair and jacket move in the warm wind, sun flare drifts, the camera pans slowly, 1985 Kodachrome film look.",
+        "Close-up: the model turns the head with a confident smile, hair blowing in the sunset breeze, golden light flares, the camera pushes in slowly, 35mm film grain."
     ),
     "3_HAUTE_COUTURE_NOIR": (
-        "The model walks toward the camera on a Paris street, the long coat flows with each step, the head turns with a poised expression, rim light sweeps across the frame and lenses, the camera dollies backward slowly, high-fashion editorial film.",
-        "Close-up: the model turns the face slowly from profile to the camera, dramatic rim light moves across the cheekbones and lenses, hair moves slightly, the camera pushes in, high-fashion editorial."
+        "The model walks toward the camera on a Paris street, the long coat flows with each step, the head turns with a poised expression, rim light sweeps across the frame, the camera dollies backward slowly, high-fashion editorial film.",
+        "Close-up: the model turns the face slowly from profile to the camera, dramatic rim light moves across the cheekbones, hair moves slightly, the camera pushes in, high-fashion editorial."
     ),
     "4_ALPINE_EXTREME": (
-        "The skier stands on a snowy glacier ridge, wind blows snow powder past the camera, the skier turns the head toward the camera and adjusts the jacket collar, bright sunlight glints across the goggle lens, the camera orbits slowly, action sports commercial.",
-        "Close-up: snow spray flies past the skier's face, the skier looks up into the camera, sharp sunlight sweeps across the goggle lens, the camera pushes in slowly, action sports commercial."
+        "The skier stands on a snowy glacier ridge, wind blows snow powder past the camera, the skier turns the head toward the camera and adjusts the jacket collar, the camera orbits slowly, action sports commercial.",
+        "Close-up: snow spray flies past the skier's face, the skier looks up into the camera, the camera pushes in slowly, action sports commercial."
     ),
     "5_RIVIERA_SUNSET": (
         "The model walks across a teak yacht deck at golden sunset, the white linen shirt moves in the sea breeze, waves sparkle behind, the model turns toward the camera and smiles, the camera dollies slowly, luxury resort commercial.",
-        "Close-up: the model turns the head toward the camera at golden sunset, hair moves in the sea breeze, warm light and sea reflections glide across the lenses, the camera pushes in slowly, luxury commercial."
+        "Close-up: the model turns the head toward the camera at golden sunset, hair moves in the sea breeze, warm light and sea reflections glide, the camera pushes in slowly, luxury commercial."
     )
 }
 
 
 TALENTS = {
-    "auto": "a stylish model in their thirties with natural styling, wearing a light linen shirt",
-    "female": "an elegant young woman with natural makeup and softly styled hair, wearing a light linen shirt",
-    "male": "a handsome man in his thirties with short dark hair and light stubble, wearing a light linen shirt",
+    "female": "the same elegant European woman in her late twenties with shoulder-length wavy light-brown hair, natural makeup, wearing a white linen shirt",
+    "male": "the same handsome Mediterranean man in his thirties with short dark hair and light stubble, wearing a white linen shirt",
 }
+# 「自動」依型號選性別 (參照已審核成片)，避免每一鏡變成不同的人
+AUTO_GENDER = {"AVIATOR": "male", "PILOT": "male", "MADRID": "male", "RL PRO": "male", "RL_PRO": "male", "BARCELONA": "male", "ATLANTIC": "male",
+               "CELEBRITY": "female", "VIVIENNE": "female", "LEXI": "female", "MY LOVER": "female", "MY_LOVER": "female", "MALLORCA": "female", "CIRCLE ROUND": "female"}
 
 def is_reference_style(style_key):
     return style_key in STYLE_PLANS
@@ -251,9 +253,12 @@ def resolve_shots(cfg, custom_en=""):
     if style_key in STYLE_PLANS:
         plan = dict(STYLE_PLANS[style_key])
         snow = "SNOW" in cfg.get("product_category", "")
-        talent = TALENTS.get(cfg.get("talent", "auto"), TALENTS["auto"])
+        tkey = cfg.get("talent", "auto")
+        if tkey not in TALENTS:
+            tkey = AUTO_GENDER.get(cfg.get("model_name", "").strip().upper(), "female")
+        talent = TALENTS[tkey]
         if snow:
-            talent = talent.replace("a light linen shirt", "a sleek technical ski jacket")
+            talent = talent.replace("a white linen shirt", "a sleek technical ski jacket")
         location = "at a sunny snowy mountain ski resort, crisp alpine peaks behind" if snow else "on a sunlit Mediterranean coastal promenade, sparkling sea behind"
         plan["subject"] = plan["subject"].format(talent=talent)
         for i, sh in enumerate(plan["shots"], 1):
@@ -261,8 +266,6 @@ def resolve_shots(cfg, custom_en=""):
             face = "facing the camera directly, head level, clear unobstructed face and eyes" if sh["wear"] else "natural candid pose"
             portrait = f"{sh['framing']} of {plan['subject']}, {scene}, {face}, {plan['look']}"
             motion = sh["motion"] if not custom_en else f"{sh['motion']} Setting: {custom_en}."
-            if sh["wear"]:
-                motion = motion + " " + ID_LOCK
             shots.append({"id": i, "portrait": portrait, "motion": motion, "wear": sh["wear"],
                           "closeup": sh["closeup"], "dur": sh["dur"], "copy": sh["copy"]})
         return shots
@@ -274,10 +277,10 @@ def resolve_shots(cfg, custom_en=""):
         p1 = f"Editorial medium portrait of a charismatic celebrity model ({cs}), facing camera directly, head level, clear unobstructed face and eyes, cinematic lighting, 85mm lens, photorealistic, 8k"
         p2 = f"Editorial close-up portrait of a charismatic celebrity model ({cs}), facing camera directly, head level, clear unobstructed face and eyes, dramatic flash and golden lighting, 85mm lens, photorealistic, 8k"
         m1 = custom_en + ". The model moves naturally, turns the head toward the camera, hair and clothes move, lights flicker in the background, the camera tracks smoothly, cinematic luxury commercial."
-        m2 = "Close-up. " + custom_en + ". The model turns the face toward the camera with a confident expression, light sweeps across the lenses, the camera pushes in slowly, cinematic."
+        m2 = "Close-up. " + custom_en + ". The model turns the face toward the camera with a confident expression, light sweeps, the camera pushes in slowly, cinematic."
     return [
-        {"id": 1, "portrait": p1, "motion": m1 + " " + ID_LOCK, "wear": True, "closeup": False, "dur": 8.0, "copy": None},
-        {"id": 2, "portrait": p2, "motion": m2 + " " + ID_LOCK, "wear": True, "closeup": True, "dur": 8.0, "copy": None},
+        {"id": 1, "portrait": p1, "motion": m1, "wear": True, "closeup": False, "dur": 8.0, "copy": None},
+        {"id": 2, "portrait": p2, "motion": m2, "wear": True, "closeup": True, "dur": 8.0, "copy": None},
     ]
 
 def output_size(cfg):
@@ -708,6 +711,8 @@ TH_STRUCT = 0.10      # SSIM-like similarity to the segment anchor frame -> morp
 TH_STRUCT_LOC = 0.45  # SSIM-like similarity to frame i-2 (sudden morph jump, not a cut)
 TH_GLASSES = 0.5      # tracker overlay opacity below this -> product lost
 CUT_STRUCT = 0.25     # struct_local below this together with a big histogram change = hard cut
+PP_MIN = 12           # shortest good run that may be ping-ponged
+TURN = 4              # frames of eased speed near each turnaround
 TRAIL = 30            # trailing window (frames) for the sharpness reference
 LW = 360              # analysis width
 SW = 64               # structure analysis width
@@ -886,17 +891,59 @@ def camera_move(img_bgr, n, start_scale=1.0, end_scale=1.05, drift=(6.0, -4.0), 
     return out
 
 
+def _pingpong(run, n):
+    # Play the run forward, then backward, repeatedly (endpoints are not repeated, so no
+    # stall). Approaching a turnaround the playback speed eases from 1.0 down to 0.35
+    # over TURN frames; fractional positions are rendered as a blend of the two
+    # neighbouring frames (never more than that: no optical-flow interpolation).
+    # A slow camera move (push-in 1.00 -> 1.06 + drift) runs over the WHOLE output, so
+    # the overall motion keeps going one way while the footage reverses.
+    L = len(run)
+    pos, d = 0.0, 1.0
+    seq = []
+    for _ in range(n):
+        seq.append(pos)
+        dist = (L - 1 - pos) if d > 0 else pos
+        v = 1.0 if dist >= TURN else 0.35 + 0.65 * (dist / float(TURN))
+        pos += d * v
+        if pos >= L - 1:
+            pos = (L - 1) - (pos - (L - 1))
+            d = -1.0
+        elif pos <= 0:
+            pos = -pos
+            d = 1.0
+    h, w = run[0].shape[:2]
+    out = []
+    for i, p in enumerate(seq):
+        i0 = int(np.floor(p))
+        f = p - i0
+        if f < 1e-3 or i0 + 1 >= L:
+            fr = run[min(i0, L - 1)]
+        else:
+            fr = cv2.addWeighted(run[i0], 1 - f, run[i0 + 1], f, 0)
+        u = i / float(max(1, n - 1))
+        e = u * u * (2 - u)  # eased in, constant speed at the end (no frozen tail)
+        sc = 1.0 + 0.06 * e
+        dx = 7.0 * e * w / 720.0
+        dy = -4.0 * e * h / 1280.0
+        M = np.float32([[sc, 0, (1 - sc) * w / 2.0 + dx], [0, sc, (1 - sc) * h / 2.0 + dy]])
+        out.append(cv2.warpAffine(fr, M, (w, h), flags=cv2.INTER_LINEAR,
+                                  borderMode=cv2.BORDER_REFLECT))
+    return out
+
+
 def _smooth_score(q):
     # per-frame quality score used to pick the best window: sharpness + low ghost + structure
     s = np.clip(q["rel_sharp"], 0, 1.2) + q["struct"] - 3.0 * q["ghost"]
     return s
 
 
-def select_usable(frames_bgr, target_n, ref_bgr=None, glasses_opacity=None, min_good_frac=0.5):
+def select_usable(frames_bgr, target_n, ref_bgr=None, glasses_opacity=None, min_good_frac=0.5,
+                  extend="pingpong"):
     n = len(frames_bgr)
     q = frame_quality(frames_bgr, ref_bgr, glasses_opacity)
     run = _longest_run(q["good"])
-    info = {"good_run": None, "used_ai_frames": 0, "held_frames": 0, "fallback": False,
+    info = {"extend_mode": "none", "good_run": None, "used_ai_frames": 0, "held_frames": 0, "fallback": False,
             "mean_rel_sharp": float(np.mean(q["rel_sharp"])) if n else 0.0,
             "good_frac": float(q["good"].mean()) if n else 0.0}
     base = ref_bgr if ref_bgr is not None else (frames_bgr[0] if n else None)
@@ -923,6 +970,14 @@ def select_usable(frames_bgr, target_n, ref_bgr=None, glasses_opacity=None, min_
         info["mean_rel_sharp"] = float(np.mean(q["rel_sharp"][a2:b2 + 1]))
         return out, info
     m = target_n - runlen
+    if extend == "pingpong" and runlen >= PP_MIN:
+        run_frames = [frames_bgr[i] for i in range(a, b + 1)]
+        out = _pingpong(run_frames, target_n)
+        info.update(good_run=(a, b), used_ai_frames=runlen, held_frames=0,
+                    extend_mode="pingpong")
+        info["mean_rel_sharp"] = float(np.mean(q["rel_sharp"][a:b + 1]))
+        return out, info
+    info["extend_mode"] = "hold"
     out = [frames_bgr[i] for i in range(a, b + 1)]
     last = frames_bgr[b]
     # held tail: eased push-in 1.00->1.05 (+ slight drift) from the last good frame.
@@ -941,6 +996,266 @@ def select_usable(frames_bgr, target_n, ref_bgr=None, glasses_opacity=None, min_
     info.update(good_run=(a, b), used_ai_frames=runlen, held_frames=m)
     info["mean_rel_sharp"] = float(np.mean(q["rel_sharp"][a:b + 1]))
     return out, info
+"""
+
+LENS_CODE = r"""
+# espner_lens: make a real product eyewear cutout read as WORN (reflective lenses,
+# fresnel edges, specular, metal catching light) instead of a flat sticker.
+# Geometry / logo / alpha of the product are never changed (identity lock): only shading.
+# Deps: numpy, opencv (cv2 4.x), Pillow.
+import cv2
+import numpy as np
+from PIL import Image
+
+
+def cutout_white_bg(photo_rgb, tol=18):
+    # near-white studio background -> alpha (flood fill from every border); lenses stay opaque
+    rgb = np.ascontiguousarray(np.asarray(photo_rgb.convert("RGB") if hasattr(photo_rgb, "convert") else photo_rgb))
+    h, w = rgb.shape[:2]
+    bg = np.zeros((h + 2, w + 2), np.uint8)
+    flags = 4 | cv2.FLOODFILL_FIXED_RANGE | cv2.FLOODFILL_MASK_ONLY | (255 << 8)
+    img = rgb.copy()
+    for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1), (w // 2, 0), (w // 2, h - 1), (0, h // 2), (w - 1, h // 2)]:
+        if bg[y + 1, x + 1] == 0:
+            cv2.floodFill(img, bg, (x, y), 0, (tol,) * 3, (tol,) * 3, flags)
+    alpha = 255 - bg[1:-1, 1:-1]
+    alpha = cv2.morphologyEx(alpha, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    alpha = cv2.GaussianBlur(alpha, (0, 0), 0.8)
+    ys, xs = np.where(alpha > 20)
+    out = np.dstack([rgb, alpha])
+    if len(xs):
+        out = out[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    return Image.fromarray(out, "RGBA")
+
+
+def _smooth01(x, a, b):
+    t = np.clip((x - a) / max(b - a, 1e-6), 0, 1)
+    return t * t * (3 - 2 * t)
+
+
+def _lens_mask_np(arr):
+    # arr: HxWx4 uint8. returns float32 0..1 (full res)
+    h0, w0 = arr.shape[:2]
+    s = min(1.0, 256.0 / w0)
+    sm = cv2.resize(arr, (max(8, int(w0 * s)), max(8, int(h0 * s))), interpolation=cv2.INTER_AREA) if s < 1 else arr
+    h, w = sm.shape[:2]
+    a = (sm[..., 3] > 127).astype(np.uint8)
+    # candidate = silhouette minus thin parts (temples, bridge, rim wires) via opening
+    k = max(3, int(0.10 * w)) | 1
+    cand = cv2.morphologyEx(a, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    if cand.sum() < 0.02 * w * h:
+        k = max(3, int(0.05 * w)) | 1
+        cand = cv2.morphologyEx(a, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    if cand.sum() == 0:
+        return np.zeros((h0, w0), np.float32)
+    dist = cv2.distanceTransform(cand, cv2.DIST_L2, 3)
+    core = dist > 0.40 * dist.max()
+    lab = cv2.cvtColor(cv2.GaussianBlur(sm[..., :3], (0, 0), max(0.8, 0.006 * w)), cv2.COLOR_RGB2LAB).astype(np.float32)
+    lab[..., 0] *= 0.6
+    cf = core.astype(np.float32)
+    sig = 0.12 * w
+    num = cv2.GaussianBlur(lab * cf[..., None], (0, 0), sig)
+    den = cv2.GaussianBlur(cf, (0, 0), sig)[..., None]
+    c_l = np.median(lab[core], axis=0)
+    field = np.where(den > 0.02, num / np.maximum(den, 1e-4), c_l)
+    band = (cand > 0) & (dist < max(2.0, 0.02 * w))
+    c_f = np.median(lab[band], axis=0) if band.any() else c_l
+    thr = float(np.clip(0.7 * np.linalg.norm(c_l - c_f), 14, 45))
+    D = np.linalg.norm(lab - field, axis=2)
+    sel = ((D < thr) & (cand > 0)).astype(np.uint8)
+    # never reach the rim: erode candidate by a minimum rim width
+    rim = max(1, int(round(0.012 * w)))
+    sel &= cv2.erode(cand, np.ones((2 * rim + 1, 2 * rim + 1), np.uint8))
+    sel = cv2.morphologyEx(sel, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    # keep components touching the core; fill holes (nose pads, logo)
+    n, lbl = cv2.connectedComponents(sel)
+    keep = np.zeros_like(sel)
+    for i in range(1, n):
+        comp = lbl == i
+        if (comp & core).any():
+            keep[comp] = 1
+    cnts, _ = cv2.findContours(keep, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    filled = np.zeros_like(keep)
+    cv2.drawContours(filled, cnts, -1, 1, -1)
+    m = cv2.resize(filled.astype(np.float32), (w0, h0), interpolation=cv2.INTER_LINEAR)
+    m = cv2.GaussianBlur(m, (0, 0), max(0.8, 0.004 * w0))
+    return np.clip(m, 0, 1).astype(np.float32)
+
+
+def lens_mask(glasses_rgba):
+    # float32 HxW 0..1: lens areas inside the rims (no frame / temples / bridge), feathered
+    return _lens_mask_np(np.asarray(glasses_rgba.convert("RGBA")))
+
+
+def _estimate_light(scene, x0, y0, x1, y1):
+    g = cv2.cvtColor(scene[y0:y1, x0:x1].astype(np.uint8), cv2.COLOR_RGB2GRAY).astype(np.float32)
+    h, w = g.shape
+    if h < 4 or w < 4:
+        return np.array([-0.5, -0.85], np.float32)
+    lx = g[:, w // 2:].mean() - g[:, :w // 2].mean()
+    ly = g[h // 2:].mean() - g[:h // 2].mean()
+    v = np.array([lx, -0.5 * ly], np.float32)
+    n = np.linalg.norm(v)
+    v = v / n * min(1.0, n / 12.0) if n > 1e-3 else np.zeros(2, np.float32)
+    v = v + np.array([-0.25, -0.9], np.float32) * 0.8   # light mostly from above
+    return v / max(np.linalg.norm(v), 1e-3)
+
+
+def _env_strip(scene, paste_x, paste_y, gw, gh):
+    H, W = scene.shape[:2]
+    ya = int(max(0, paste_y - 3.0 * gh))
+    yb = int(min(H, paste_y + 6.5 * gh))
+    xl = int(max(0, paste_x - 0.15 * gw))
+    xr = int(min(W, paste_x + 1.15 * gw))
+    parts = [p for p in (scene[ya:yb, :xl], scene[ya:yb, xr:]) if p.shape[1] > 0]
+    E = np.concatenate(parts, axis=1) if parts else scene[ya:yb]
+    if E.shape[1] < gw:
+        E = scene[ya:yb]
+    cy = (paste_y + 2.1 * gh - ya) / max(1, (yb - ya))
+    # horizon / strongest tonal step (sea vs sky, street vs buildings): put it mid-lens so the
+    # reflection has the light-above / dark-below structure of real mirror lenses
+    rows = cv2.GaussianBlur(E.mean(2).mean(1).astype(np.float32).reshape(-1, 1), (1, 0), max(1.5, 0.05 * E.shape[0])).ravel()
+    if len(rows) > 12:
+        d = rows[6:] - rows[:-6]
+        lo = int(0.25 * len(d))
+        j = lo + int(np.argmax(np.abs(d[lo:])))
+        if abs(d[j]) > 18:
+            cy = (j + 3) / float(len(rows)) - 0.04
+    return E[:, ::-1].copy(), float(np.clip(cy, 0.1, 0.9))
+
+
+def _lens_env(E, cy_frac, cx_frac, lw, lh):
+    # perspective-ish window of the environment mapped on a convex (spherical) lens
+    Eh, Ew = E.shape[:2]
+    win_w = min(float(Ew), 3.3 * lw)
+    win_h = win_w * lh / lw * 1.05
+    if win_h > Eh:
+        win_h = float(Eh)
+        win_w = min(float(Ew), win_h * lw / lh)
+    cx = float(np.clip(cx_frac * Ew, win_w / 2, Ew - win_w / 2))
+    cy = float(np.clip(cy_frac * Eh, win_h / 2, Eh - win_h / 2))
+    xs = (np.arange(lw, dtype=np.float32) + 0.5) / lw * 2 - 1
+    ys = (np.arange(lh, dtype=np.float32) + 0.5) / lh * 2 - 1
+    nx, ny = np.meshgrid(xs, ys)
+    r2 = nx * nx + ny * ny
+    bulge = 1.0 + 0.55 * r2
+    # slight vertical tilt (keystone) so the horizon curves like in a curved mirror
+    mx = (cx + nx * bulge * win_w / 2).astype(np.float32)
+    my = (cy + ny * bulge * win_h / 2 + 0.06 * win_h * nx * nx).astype(np.float32)
+    out = cv2.remap(E, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    return cv2.GaussianBlur(out, (0, 0), 1.0 + lw / 70.0)
+
+
+def render_worn_glasses(portrait_rgb, glasses_rgba, paste_x, paste_y, strength=1.0):
+    # portrait_rgb: PIL image (or HxWx3 array). Returns PIL RGBA (same size as glasses_rgba)
+    scene = np.asarray(portrait_rgb.convert("RGB") if hasattr(portrait_rgb, "convert") else portrait_rgb).astype(np.float32)
+    H, W = scene.shape[:2]
+    g = np.asarray(glasses_rgba.convert("RGBA")).astype(np.float32)
+    rgb, a = g[..., :3], g[..., 3] / 255.0
+    gh, gw = rgb.shape[:2]
+    strength = float(np.clip(strength, 0.0, 1.5))
+    lm = _lens_mask_np(g.astype(np.uint8))
+    solid = a > 0.5
+
+    # ---- 1) colour / exposure match to the local scene light (gentle, never washes out)
+    pad_x, pad_y = int(gw * 0.6), int(gh * 1.6)
+    x0, y0 = max(0, paste_x - pad_x), max(0, paste_y - pad_y)
+    x1, y1 = min(W, paste_x + gw + pad_x), min(H, paste_y + gh + pad_y)
+    if x1 - x0 < 4 or y1 - y0 < 4:
+        x0, y0, x1, y1 = 0, 0, W, H
+    local = scene[y0:y1, x0:x1].reshape(-1, 3)
+    light = 0.6 * local.mean(0) + 0.4 * scene.reshape(-1, 3).mean(0)
+    tint = 1.0 + 0.45 * (np.clip(light / max(1e-3, light.mean()), 0.78, 1.25) - 1.0)
+    prod_l = float(rgb[solid].mean()) if solid.any() else 128.0
+    expo = float(np.clip((float(local.mean()) / max(prod_l, 1.0)) ** 0.30, 0.74, 1.04))
+    base = rgb * expo * tint
+
+    # ---- lens type from the product colours
+    lm_b = lm > 0.5
+    if lm_b.sum() > 20:
+        lens_col = np.median(rgb[lm_b], axis=0)
+    else:
+        lens_col = np.array([60.0, 60.0, 60.0])
+    V = float(lens_col.max())
+    m = float(_smooth01(np.array([V]), 60, 135)[0])          # 0 dark lens .. 1 mirror lens
+    R0 = (0.22 + 0.50 * m) * strength
+
+    out = base.copy()
+    lensf = lm[..., None]
+    light_dir = _estimate_light(scene, x0, y0, x1, y1)
+
+    # ---- 2) lens environment reflection
+    n, lbl, stats, cents = cv2.connectedComponentsWithStats((lm > 0.35).astype(np.uint8), connectivity=8)
+    comps = sorted(range(1, n), key=lambda i: -stats[i, cv2.CC_STAT_AREA])[:2]
+    comps = [i for i in comps if stats[i, cv2.CC_STAT_AREA] > 0.02 * gw * gh]
+    comps.sort(key=lambda i: cents[i][0])
+    E, cy_frac = _env_strip(scene, paste_x, paste_y, gw, gh)
+    env_full = np.zeros_like(base)
+    spec = np.zeros((gh, gw), np.float32)
+    shade = np.ones((gh, gw), np.float32)
+    Rmap = np.zeros((gh, gw), np.float32)
+    tn = lens_col / max(float(lens_col.mean()), 1.0)
+    for k, i in enumerate(comps):
+        bx, by, bw, bh = stats[i, 0], stats[i, 1], stats[i, 2], stats[i, 3]
+        cxf = 0.30 if len(comps) == 2 and k == 0 else (0.70 if len(comps) == 2 else 0.5)
+        env = _lens_env(E, cy_frac, cxf, bw, bh)
+        mean_l = float(env.mean())
+        gain = float(np.clip(105.0 / max(mean_l, 1.0), 1.0, 1.9)) if m > 0.4 else 1.0
+        # crisp-ify + contrast around the mean (mirrors are punchy)
+        env = (env - mean_l) * 1.4 + mean_l
+        env = np.clip(env * gain, 0, 255) * (0.55 + 0.45 * tn) ** 1.0 * (0.86 if m > 0.5 else 0.94)
+        env_full[by:by + bh, bx:bx + bw] = env
+        comp = (lbl[by:by + bh, bx:bx + bw] == i).astype(np.uint8)
+        d = cv2.distanceTransform(np.pad(comp, 1), cv2.DIST_L2, 3)[1:-1, 1:-1]
+        dn = np.clip(d / max(0.30 * min(bw, bh), 1.0), 0, 1)
+        fres = (1.0 - dn) ** 1.5                                   # strong near the lens edge
+        yy = np.linspace(0, 1, bh, dtype=np.float32)[:, None]
+        Rmap[by:by + bh, bx:bx + bw] = R0 * (0.80 + 0.55 * fres)
+        shade[by:by + bh, bx:bx + bw] = (0.78 + 0.22 * yy) * (0.90 + 0.10 * dn) if m < 0.5 else (0.80 + 0.20 * yy) * (0.90 + 0.10 * dn)
+
+        # ---- 3) specular: elongated soft streak + small crisp hot-spot on the light side
+        xs = (np.arange(bw, dtype=np.float32) + 0.5) / bw * 2 - 1
+        ys = (np.arange(bh, dtype=np.float32) + 0.5) / bh * 2 - 1
+        nx, ny = np.meshgrid(xs, ys)
+        px, py = light_dir[0] * 0.45, light_dir[1] * 0.5
+        ang = np.deg2rad(-32.0 if light_dir[0] <= 0 else 32.0)
+        u = (nx - px) * np.cos(ang) + (ny - py) * np.sin(ang)
+        v = -(nx - px) * np.sin(ang) + (ny - py) * np.cos(ang)
+        streak = np.exp(-(u ** 2) / (2 * 0.42 ** 2) - (v ** 2) / (2 * 0.075 ** 2))
+        streak2 = 0.35 * np.exp(-(u ** 2) / (2 * 0.40 ** 2) - ((v - 0.30) ** 2) / (2 * 0.06 ** 2))
+        hot = np.exp(-((nx - px * 1.35) ** 2 + (ny - py * 1.35) ** 2) / (2 * 0.12 ** 2))
+        spec[by:by + bh, bx:bx + bw] = np.maximum(spec[by:by + bh, bx:bx + bw], 0.55 * streak + streak2 + 0.7 * hot)
+
+    refl = np.clip(Rmap, 0, 0.92)[..., None] * lensf
+    out = out * (1 - lensf) + (out * shade[..., None]) * lensf
+    out = out * (1 - refl) + env_full * refl
+    sp = (spec * (0.55 if m > 0.5 else 0.6) * strength)[..., None] * lensf
+    wcol = np.array([255.0, 252.0, 244.0]) * 0.5 + 0.5 * np.clip(light / max(light.max(), 1) * 255.0, 180, 255)
+    out = out + (255.0 - out) * np.clip(sp, 0, 0.95) * (wcol / 255.0)
+
+    # ---- frame: metal / acetate catches the light
+    fr = (solid & (lm < 0.2)).astype(np.float32)
+    fr_soft = cv2.GaussianBlur(fr, (0, 0), max(1.0, gw / 150.0))
+    gy, gx = np.gradient(fr_soft)
+    nrm = np.sqrt(gx * gx + gy * gy) + 1e-4
+    # outward normal of the frame bar = -grad(mask); facing the light => bright
+    facing = np.clip(-(gx * light_dir[0] + gy * light_dir[1]) / nrm, 0, 1) ** 3
+    edge = np.clip(nrm / max(float(nrm.max()), 1e-4) * 1.4, 0, 1)
+    lum = base.mean(2)
+    ridge = lum - cv2.GaussianBlur(lum, (0, 0), max(2.0, gw / 40.0))
+    metal = 1.0 if float(np.median(lum[fr > 0.5])) > 90 else 0.55 if (fr > 0.5).any() else 1.0
+    fr3 = fr[..., None]
+    out = out + fr3 * (0.9 * ridge)[..., None] * strength
+    hl = (facing * edge * (0.55 if metal >= 1 else 0.45) * strength)[..., None] * fr3
+    out = out + (255.0 - out) * np.clip(hl, 0, 0.9)
+
+    # ---- 5) grain matched to portrait, softer alpha edge
+    gray = cv2.cvtColor(scene.astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    sigma = float(np.clip(cv2.Laplacian(gray, cv2.CV_32F).std() / 18.0, 0.8, 3.5))
+    out = out + np.random.RandomState(7).normal(0, sigma, out.shape).astype(np.float32)
+    a2 = cv2.GaussianBlur(a.astype(np.float32), (3, 3), 0.7)
+    res = np.concatenate([np.clip(out, 0, 255), (a2 * 255.0)[..., None]], axis=2).astype(np.uint8)
+    return Image.fromarray(res, "RGBA")
 """
 
 STAGE_3A_CODE = r"""
@@ -1137,7 +1452,13 @@ def composite_eyewear_on_model(portrait_pil, prod_rgba, is_closeup=False, shot_k
     gw, gh = glasses_resized.size
     paste_x = face_cx - gw // 2
     paste_y = eye_y - int(gh * 0.48)
-    glasses_resized = harmonize_eyewear(portrait_pil, glasses_resized, paste_x, paste_y)
+    try:
+        # 真實鏡片質感：鏡面反射場景 (天空/海)、上深下淺漸層、高光、金屬框受光；外型 100% 不變
+        import espner_lens as LENS
+        glasses_resized = LENS.render_worn_glasses(portrait_pil.convert("RGB"), glasses_resized, paste_x, paste_y)
+    except Exception as _e:
+        print(f"  ℹ️ 鏡片質感模組略過 ({_e})，改用基本打光")
+        glasses_resized = harmonize_eyewear(portrait_pil, glasses_resized, paste_x, paste_y)
     # 保存真實眼鏡圖與位置：3C 會在 AI 影片每一格依頭部運動重新貼回真品 (避免 AI 把眼鏡畫變形)
     glasses_resized.save(f"/content/temp/glasses_shot{shot_key}.png")
     GLASSES_META[shot_key] = {"x": int(paste_x), "y": int(paste_y), "src_w": int(w), "src_h": int(h)}
@@ -1155,7 +1476,7 @@ def composite_eyewear_on_model(portrait_pil, prod_rgba, is_closeup=False, shot_k
 
 for sh in SHOTS:
     sid = sh["id"]
-    seed = 1024 * sid
+    seed = 1024 + sid  # 相近種子 + 同一段人物描述，讓各鏡維持同一位模特兒
     base = gen_portrait(sh["portrait"], seed)
     if sh["wear"]:
         # 偵測不到正面人臉就換種子重生 (最多 3 次)，避免把眼鏡貼在錯誤位置
@@ -1175,6 +1496,8 @@ for sh in SHOTS:
         if f0 is not None:
             FACE_BOXES[str(sid)] = [int(f0[0]) / GEN_W, int(f0[1]) / GEN_H, int(f0[2]) / GEN_W, int(f0[3]) / GEN_H]
     kf.save(f"/content/temp/keyframe_shot{sid}.png")
+    # 給影片模型的是「沒戴眼鏡」的原始肖像：AI 不會畫出變形或重影的眼鏡，真品由 3C 逐格追蹤貼上
+    base.convert("RGB").save(f"/content/temp/base_shot{sid}.png")
     print(f"  ✓ 第 {sid}/{len(SHOTS)} 鏡首幀完成 ({'配戴真實眼鏡' if sh['wear'] else '未配戴'})")
 with open("/content/temp/face_boxes.json", "w", encoding="utf-8") as f:
     json.dump(FACE_BOXES, f)
@@ -1211,7 +1534,7 @@ def check_embeds(*ts):
         if not torch.isfinite(t).all():
             raise RuntimeError("[3B] 文字特徵含 NaN/Inf (FP16 溢位)，請改選方案 1C (SVD-XT) 或方案 2。")
 
-neg_video = "frozen frame, still photo, fast motion, sudden movement, walking, running, morphing, melting face, distorted face, deformed sunglasses, melting frame, morphing lenses, extra glasses, warped logo, motion blur, ghosting, double exposure, on-screen text, subtitles, watermark, blurry, flickering, jerky camera"
+neg_video = "sunglasses, glasses, eyewear, goggles, frozen frame, still photo, fast motion, sudden movement, running, morphing, melting face, distorted face, extra limbs, warped logo, motion blur, ghosting, double exposure, on-screen text, subtitles, watermark, blurry, flickering, jerky camera"
 
 if "Wan2.2" in gen_mode:
     print("[3B] 正在單獨載入 Wan2.2 文字編碼器至 T4 GPU (避免與影片網路同時佔用系統 RAM)...")
@@ -1426,7 +1749,18 @@ if "方案 2" in gen_mode:
     render_3d_motion_fallback()
     raise SystemExit(0)
 
-KFS = {sh["id"]: Image.open(f"/content/temp/keyframe_shot{sh['id']}.png").convert("RGB") for sh in SHOTS}
+def _gen_input(sid):
+    # 有真實眼鏡資料 → 用沒戴眼鏡的肖像生成，之後逐格貼回真品；否則用合成好的首幀
+    bp = f"/content/temp/base_shot{sid}.png"
+    try:
+        with open("/content/temp/glasses_meta.json", "r", encoding="utf-8") as _f:
+            has_meta = str(sid) in json.load(_f)
+    except Exception:
+        has_meta = False
+    p = bp if (has_meta and os.path.exists(bp)) else f"/content/temp/keyframe_shot{sid}.png"
+    return Image.open(p).convert("RGB")
+
+KFS = {sh["id"]: _gen_input(sh["id"]) for sh in SHOTS}
 DURS = {sh["id"]: sh["dur"] for sh in SHOTS}
 
 def check_frames(frames, tag):
@@ -4627,7 +4961,7 @@ cells = [
             "# ==============================================================================\n",
             "# 子程序腳本 3A：純 OpenCV 零記憶體去背 + 中英導演提示詞自動翻譯 + RealVisXL 真人模特兒生成 + 100% 原始眼鏡配戴合成\n",
             "# ==============================================================================\n",
-        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("track_code", TRACK_CODE) + embed_stage("salvage_code", SALVAGE_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
+        ] + embed_stage("shot_plan_code", SHOTPLAN_CODE) + embed_stage("track_code", TRACK_CODE) + embed_stage("salvage_code", SALVAGE_CODE) + embed_stage("lens_code", LENS_CODE) + embed_stage("stage_3a_code", STAGE_3A_CODE) + [
             "\n",
             "# ==============================================================================\n",
             "# 子程序腳本 3B：獨立文字編碼器 (T4 原生 FP16 加速，算完即釋放 9.5GB T5 記憶體！)\n",
@@ -4642,8 +4976,9 @@ cells = [
             "Path(\"/content/temp/shot_plan.py\").write_text(shot_plan_code, encoding=\"utf-8\")\n",
             "Path(\"/content/temp/espner_track.py\").write_text(track_code, encoding=\"utf-8\")\n",
             "Path(\"/content/temp/espner_salvage.py\").write_text(salvage_code, encoding=\"utf-8\")\n",
+            "Path(\"/content/temp/espner_lens.py\").write_text(lens_code, encoding=\"utf-8\")\n",
             "import glob as _glob\n",
-            "for _old in _glob.glob(\"/content/temp/keyframe_shot*.png\") + _glob.glob(\"/content/temp/glasses_shot*.png\") + _glob.glob(\"/content/temp/raw_shot*.mp4\") + [\"/content/temp/glasses_meta.json\"] + [\"/content/temp/stage3c_status.json\", \"/content/temp/prompt_embeds.pt\"]:\n",
+            "for _old in _glob.glob(\"/content/temp/keyframe_shot*.png\") + _glob.glob(\"/content/temp/glasses_shot*.png\") + _glob.glob(\"/content/temp/base_shot*.png\") + _glob.glob(\"/content/temp/raw_shot*.mp4\") + [\"/content/temp/glasses_meta.json\"] + [\"/content/temp/stage3c_status.json\", \"/content/temp/prompt_embeds.pt\"]:\n",
             "    if os.path.exists(_old):\n",
             "        os.remove(_old)\n",
             "Path(\"/content/temp/stage_3a.py\").write_text(stage_3a_code, encoding=\"utf-8\")\n",
